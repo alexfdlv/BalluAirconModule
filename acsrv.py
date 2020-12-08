@@ -42,7 +42,6 @@ class LanConfig:
   random_2: str
   time_2: int
 
-
 @dataclass
 class Encryption:
   sign_key: bytes
@@ -63,7 +62,6 @@ class Encryption:
   @staticmethod
   def hmac_digest(key: bytes, msg: bytes) -> bytes:
     return hmac.digest(key, msg, 'sha256')
-
 
 @dataclass
 class Config:
@@ -95,11 +93,6 @@ class Error(Exception):
   """Error class for AC handling."""
   pass
 
-class AirFlow(enum.IntEnum):
-  OFF = 0
-  VERTICAL_ONLY = 1
-  HORIZONTAL_ONLY = 2
-  VERTICAL_AND_HORIZONTAL = 3
 
 class FanSpeed(enum.IntEnum):
   AUTO = 0
@@ -108,109 +101,45 @@ class FanSpeed(enum.IntEnum):
   MEDIUM = 7
   HIGH = 8
   HIGHER = 9
-
 class SleepMode(enum.IntEnum):
   STOP = 0
   ONE = 1
   TWO = 2
   THREE = 3
   FOUR = 4
-
-class StateMachine(enum.IntEnum):
-  FANONLY = 0
-  HEAT = 1
-  COOL = 2
-  DRY = 3
-  AUTO = 4
-  FAULTSHIELD = 5
-  POWEROFF = 6
-  OFFLINE = 7
-  READONLYSHARED = 8
-
 class AcWorkMode(enum.IntEnum):
   FAN = 0
   HEAT = 1
   COOL = 2
   DRY = 3
   AUTO = 4
-
-# МЗ: Класс отклчен, т.к. уже объявлен ранее
-# class AirFlow(enum.Enum):
-#   OFF = 0
-#   ON = 1
-
-class DeviceErrorStatus(enum.Enum):
-  NORMALSTATE = 0
-  FAULTSTATE = 1
-
+class AirFlow(enum.Enum):
+  OFF = 0
+  ON = 1
 class Dimmer(enum.Enum):
   ON = 0
   OFF = 1
-
 class DoubleFrequency(enum.Enum):
   OFF = 0
   ON = 1
-
 class Economy(enum.Enum):
   OFF = 0
   ON = 1
-
 class EightHeat(enum.Enum):
   OFF = 0
   ON = 1
-
 class FastColdHeat(enum.Enum):
   OFF = 0
   ON = 1
-
 class Power(enum.Enum):
   OFF = 0
   ON = 1
-
 class Quiet(enum.Enum):
   OFF = 0
   ON = 1
-
 class TemperatureUnit(enum.Enum):
   CELSIUS = 0
   FAHRENHEIT = 1
-
-class HumidifierWorkMode(enum.Enum):
-  NORMAL = 0
-  NIGHTLIGHT = 1
-  SLEEP = 2
-
-class HumidifierWater(enum.Enum):
-  OK = 0
-  NO_WATER = 1
-
-class Mist(enum.Enum):
-  SMALL = 1
-  MIDDLE = 2
-  BIG = 3
-
-class MistState(enum.Enum):
-  OFF = 0
-  ON = 1
-
-class FglOperationMode(enum.IntEnum):
-  OFF = 0
-  ON = 1
-  AUTO = 2
-  COOL = 3
-  DRY = 4
-  FAN = 5
-  HEAT = 6
-
-class FglFanSpeed(enum.IntEnum):
-  QUIET = 0
-  LOW = 1
-  MEDIUM = 2
-  HIGH = 3
-  AUTO = 4
-
-
-
 class Properties(object):
   @classmethod
   def _get_metadata(cls, attr: str):
@@ -292,59 +221,6 @@ class AcProperties(Properties):
   t_work_mode: AcWorkMode = field(default=AcWorkMode.AUTO, metadata={'base_type': 'integer', 'read_only': False,
     'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: AcWorkMode[x]}})  # WorkModeStatus
 
-
-@dataclass_json
-@dataclass
-class HumidifierProperties(Properties):
-  humi: int = field(default=0, metadata={'base_type': 'integer', 'read_only': False})
-  mist: Mist = field(default=Mist.SMALL, metadata={'base_type': 'integer', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: Mist[x]}})
-  mistSt: MistState = field(default=MistState.OFF, metadata={'base_type': 'integer', 'read_only': True,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: MistState[x]}})
-  realhumi: int = field(default=0, metadata={'base_type': 'integer', 'read_only': True})
-  remain: int = field(default=0, metadata={'base_type': 'integer', 'read_only': True})
-  switch: Power = field(default=Power.ON, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: Power[x]}})
-  temp: int = field(default=81, metadata={'base_type': 'integer', 'read_only': True})
-  timer: int = field(default=-1, metadata={'base_type': 'integer', 'read_only': False})
-  water: HumidifierWater = field(default=HumidifierWater.OK, metadata={'base_type': 'boolean', 'read_only': True,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: HumidifierWater[x]}})
-  workmode: HumidifierWorkMode = field(default=HumidifierWorkMode.NORMAL, metadata={'base_type': 'integer', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: HumidifierWorkMode[x]}})
-
-
-@dataclass_json
-@dataclass
-class FglProperties(Properties):
-  operation_mode: FglOperationMode = field(default=FglOperationMode.AUTO, metadata={'base_type': 'integer', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: FglOperationMode[x]}})
-  fan_speed: FglFanSpeed = field(default=FglFanSpeed.AUTO, metadata={'base_type': 'integer', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: FglFanSpeed[x]}})
-  adjust_temperature: int = field(default=25, metadata={'base_type': 'integer', 'read_only': False})
-  af_vertical_direction: int = field(default=3, metadata={'base_type': 'integer', 'read_only': False})
-  af_vertical_swing: AirFlow = field(default=AirFlow.OFF, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: AirFlow[x]}})  # HorizontalAirFlow
-  af_horizontal_direction: int = field(default=3, metadata={'base_type': 'integer', 'read_only': False})
-  af_horizontal_swing: AirFlow = field(default=AirFlow.OFF, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: AirFlow[x]}})  # HorizontalAirFlow
-  economy_mode: Economy = field(default=Economy.OFF, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: Economy[x]}})
-
-
-@dataclass_json
-@dataclass
-class FglBProperties(Properties):
-  operation_mode: FglOperationMode = field(default=FglOperationMode.AUTO, metadata={'base_type': 'integer', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: FglOperationMode[x]}})
-  fan_speed: FglFanSpeed = field(default=FglFanSpeed.AUTO, metadata={'base_type': 'integer', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: FglFanSpeed[x]}})
-  adjust_temperature: int = field(default=25, metadata={'base_type': 'integer', 'read_only': False})
-  af_vertical_move_step1: int = field(default=3, metadata={'base_type': 'integer', 'read_only': False})
-  af_horizontal_move_step1: int = field(default=3, metadata={'base_type': 'integer', 'read_only': False})
-  economy_mode: Economy = field(default=Economy.OFF, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: Economy[x]}})
-
-
 @dataclass
 class Data:
   """The current data store: commands, updates and properties."""
@@ -368,7 +244,6 @@ class Data:
       if value != old_value:
         setattr(self.properties, name, value)
         logging.debug('Updated properties: %s' % self.properties)
-      mqtt_publish_update(name, value)
 
 
 def queue_command(name: str, value, recursive: bool = False) -> None:
@@ -491,7 +366,6 @@ class KeepAliveThread(threading.Thread):
         self._json['local_reg']['notify'] = int(
             _data.commands_queue.qsize() > 0 or self.run_lock.wait(self._KEEP_ALIVE_INTERVAL))
 
-
 class QueryStatusThread(threading.Thread):
   """Thread to preiodically query the status of all properties.
   
@@ -530,7 +404,6 @@ class QueryStatusThread(threading.Thread):
         with _keep_alive.run_lock:
           _keep_alive.run_lock.notify()
       time.sleep(self._STATUS_UPDATE_INTERVAL)
-
 
 class HTTPRequestHandler(BaseHTTPRequestHandler):
   """Handler for AC related HTTP requests."""
@@ -718,48 +591,6 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
   }
 
 
-def mqtt_on_connect(client: mqtt.Client, userdata, flags, rc):
-  client.subscribe([(_mqtt_topics['sub'].format(data_field.name), 0)
-                    for data_field in fields(_data.properties)])
-  # Subscribe to subscription updates.
-  client.subscribe('$SYS/broker/log/M/subscribe/#')
-
-
-def mqtt_on_subscribe(payload: bytes):
-  # The last segment in the space delimited string is the topic.
-  topic = payload.decode('utf-8').rsplit(' ', 1)[-1]
-  if topic not in _mqtt_topics['pub']:
-    return
-  name = topic.rsplit('/', 2)[1]
-  mqtt_publish_update(name, _data.get_property(name))
-
-
-def mqtt_on_message(client: mqtt.Client, userdata, message: mqtt.MQTTMessage):
-  logging.info('MQTT message Topic: %r, Payload %r',
-               message.topic, message.payload)
-  if message.topic.startswith('$SYS/broker/log/M/subscribe'):
-    return mqtt_on_subscribe(message.payload)
-  name = message.topic.rsplit('/', 2)[1]
-  payload = message.payload.decode('utf-8')
-  if name == 't_work_mode' and payload == 'fan_only':
-    payload = 'FAN'
-  try:
-    queue_command(name, payload.upper())
-  except Exception:
-    logging.exception('Failed to parse value %r for property %r',
-                      payload.upper(), name)
-
-
-def mqtt_publish_update(name: str, value) -> None:
-  if _mqtt_client:
-    if isinstance(value, enum.Enum):
-      payload = 'fan_only' if value is AcWorkMode.FAN else value.name.lower()
-    else:
-      payload = str(value)
-    _mqtt_client.publish(_mqtt_topics['pub'].format(name),
-                         payload=payload.encode('utf-8'))
-
-
 def ParseArguments() -> argparse.Namespace:
   """Parse command line arguments."""
   arg_parser = argparse.ArgumentParser(
@@ -771,81 +602,27 @@ def ParseArguments() -> argparse.Namespace:
                           help='IP address for the AC.')
   arg_parser.add_argument('--config', required=True,
                           help='LAN Config file.')
-  arg_parser.add_argument('--device_type', default='ac',
-                          choices={'ac', 'fgl', 'fgl_b', 'humidifier'},
-                          help='Device type (for systems other than Hisense A/C).')
-  arg_parser.add_argument('--mqtt_host', default=None,
-                          help='MQTT broker hostname or IP address.')
-  arg_parser.add_argument('--mqtt_port', type=int, default=1883,
-                          help='MQTT broker port.')
-  arg_parser.add_argument('--mqtt_client_id', default=None,
-                          help='MQTT client ID.')
-  arg_parser.add_argument('--mqtt_user', default=None,
-                          help='<user:password> for the MQTT channel.')
-  arg_parser.add_argument('--mqtt_topic', default='hisense_ac',
-                          help='MQTT topic.')
-  arg_parser.add_argument('--log_level', default='WARNING',
-                          choices={'CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG'},
-                          help='Minimal log level.')
   return arg_parser.parse_args()
 
 
 if __name__ == '__main__':
-  _parsed_args = ParseArguments()  # type: argparse.Namespace
+    _parsed_args = ParseArguments()  # type: argparse.Namespace
 
-  if sys.platform == 'linux':
-    logging_handler = logging.handlers.SysLogHandler(address='/dev/log')
-  elif sys.platform == 'darwin':
-    logging_handler = logging.handlers.SysLogHandler(address='/var/run/syslog')
-  elif sys.platform.lower() in ['windows', 'win32']:
-    logging_handler = logging.handlers.SysLogHandler()
-  else:  # Unknown platform, revert to stderr
-    logging_handler = logging.StreamHandler(sys.stderr)
-  logging_handler.setFormatter(
-      logging.Formatter(fmt='{levelname[0]}{asctime}.{msecs:03.0f}  '
-                        '{filename}:{lineno}] {message}',
-                         datefmt='%m%d %H:%M:%S', style='{'))
-  logger = logging.getLogger()
-  logger.setLevel(_parsed_args.log_level)
-  logger.addHandler(logging_handler)
-
-  _config = Config()
-  if _parsed_args.device_type == 'ac':
+    _config = Config()
+    
     _data = Data(properties=AcProperties())
-  elif _parsed_args.device_type == 'fgl':
-    _data = Data(properties=FglProperties())
-  elif _parsed_args.device_type == 'fgl_b':
-    _data = Data(properties=FglBProperties())
-  elif _parsed_args.device_type == 'humidifier':
-    _data = Data(properties=HumidifierProperties())
-  else:
-    sys.exit(1)  # Should never get here.
+    
+    _keep_alive = None  # type: typing.Optional[KeepAliveThread]
 
-  _mqtt_client = None  # type: typing.Optional[mqtt.Client]
-  _mqtt_topics = {}  # type: typing.Dict[str, str]
-  if _parsed_args.mqtt_host:
-    _mqtt_topics['pub'] = '/'.join((_parsed_args.mqtt_topic, '{}', 'status'))
-    _mqtt_topics['sub'] = '/'.join((_parsed_args.mqtt_topic, '{}', 'command'))
-    _mqtt_client = mqtt.Client(client_id=_parsed_args.mqtt_client_id,
-                               clean_session=True)
-    _mqtt_client.on_connect = mqtt_on_connect
-    _mqtt_client.on_message = mqtt_on_message
-    if _parsed_args.mqtt_user:
-      _mqtt_client.username_pw_set(*_parsed_args.mqtt_user.split(':',1))
-    _mqtt_client.connect(_parsed_args.mqtt_host, _parsed_args.mqtt_port)
-    _mqtt_client.loop_start()
+    query_status = QueryStatusThread()
+    query_status.start()
 
-  _keep_alive = None  # type: typing.Optional[KeepAliveThread]
+    _keep_alive = KeepAliveThread()
+    _keep_alive.start()
 
-  query_status = QueryStatusThread()
-  query_status.start()
-
-  _keep_alive = KeepAliveThread()
-  _keep_alive.start()
-
-  _httpd = HTTPServer(('', _parsed_args.port), HTTPRequestHandler)
-  try:
-    _httpd.serve_forever()
-  except KeyboardInterrupt:
-    pass
-  _httpd.server_close()
+    _httpd = HTTPServer(('', _parsed_args.port), HTTPRequestHandler)
+    try:
+      _httpd.serve_forever()
+    except KeyboardInterrupt:
+      pass
+    _httpd.server_close()
