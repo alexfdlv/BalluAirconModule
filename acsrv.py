@@ -42,7 +42,6 @@ class LanConfig:
   random_2: str
   time_2: int
 
-
 @dataclass
 class Encryption:
   sign_key: bytes
@@ -63,7 +62,6 @@ class Encryption:
   @staticmethod
   def hmac_digest(key: bytes, msg: bytes) -> bytes:
     return hmac.digest(key, msg, 'sha256')
-
 
 @dataclass
 class Config:
@@ -95,6 +93,7 @@ class Error(Exception):
   """Error class for AC handling."""
   pass
 
+
 class FanSpeed(enum.IntEnum):
   AUTO = 0
   LOWER = 5
@@ -102,58 +101,45 @@ class FanSpeed(enum.IntEnum):
   MEDIUM = 7
   HIGH = 8
   HIGHER = 9
-
 class SleepMode(enum.IntEnum):
   STOP = 0
   ONE = 1
   TWO = 2
   THREE = 3
   FOUR = 4
-
 class AcWorkMode(enum.IntEnum):
   FAN = 0
   HEAT = 1
   COOL = 2
   DRY = 3
   AUTO = 4
-
 class AirFlow(enum.Enum):
   OFF = 0
   ON = 1
-
 class Dimmer(enum.Enum):
   ON = 0
   OFF = 1
-
 class DoubleFrequency(enum.Enum):
   OFF = 0
   ON = 1
-
 class Economy(enum.Enum):
   OFF = 0
   ON = 1
-
 class EightHeat(enum.Enum):
   OFF = 0
   ON = 1
-
 class FastColdHeat(enum.Enum):
   OFF = 0
   ON = 1
-
 class Power(enum.Enum):
   OFF = 0
   ON = 1
-
 class Quiet(enum.Enum):
   OFF = 0
   ON = 1
-
 class TemperatureUnit(enum.Enum):
   CELSIUS = 0
   FAHRENHEIT = 1
-
-
 class Properties(object):
   @classmethod
   def _get_metadata(cls, attr: str):
@@ -234,7 +220,6 @@ class AcProperties(Properties):
     'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: FastColdHeat[x]}})  # FastCoolHeatStatus
   t_work_mode: AcWorkMode = field(default=AcWorkMode.AUTO, metadata={'base_type': 'integer', 'read_only': False,
     'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: AcWorkMode[x]}})  # WorkModeStatus
-
 
 @dataclass
 class Data:
@@ -381,7 +366,6 @@ class KeepAliveThread(threading.Thread):
         self._json['local_reg']['notify'] = int(
             _data.commands_queue.qsize() > 0 or self.run_lock.wait(self._KEEP_ALIVE_INTERVAL))
 
-
 class QueryStatusThread(threading.Thread):
   """Thread to preiodically query the status of all properties.
   
@@ -420,7 +404,6 @@ class QueryStatusThread(threading.Thread):
         with _keep_alive.run_lock:
           _keep_alive.run_lock.notify()
       time.sleep(self._STATUS_UPDATE_INTERVAL)
-
 
 class HTTPRequestHandler(BaseHTTPRequestHandler):
   """Handler for AC related HTTP requests."""
