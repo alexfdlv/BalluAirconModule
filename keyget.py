@@ -13,7 +13,7 @@ control the AC.
 
 The --app flag depends on your AC.
 """
-__author__ = 'droreiger@gmail.com (Dror Eiger)'
+__author__ = 'AlexFdlv@bk.ru (Alex Fdlv)'
 
 import argparse
 import base64
