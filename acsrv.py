@@ -1,5 +1,5 @@
 """
-HTTP Server for for managing the Ballu air conditioner over a local network
+HTTP Server for managing the Ballu air conditioner over a local network
 """
 
 __author__ = 'AlexFdlv@bk.ru (Alex Fdlv)'
@@ -140,6 +140,8 @@ class Quiet(enum.Enum):
 class TemperatureUnit(enum.Enum):
   CELSIUS = 0
   FAHRENHEIT = 1
+
+
 class Properties(object):
   @classmethod
   def _get_metadata(cls, attr: str):
@@ -156,7 +158,6 @@ class Properties(object):
   @classmethod
   def get_read_only(cls, attr: str):
     return cls._get_metadata(attr)['read_only']
-
 
 @dataclass_json
 @dataclass
@@ -285,12 +286,10 @@ def queue_command(name: str, value, recursive: bool = False) -> None:
     with _keep_alive.run_lock:
       _keep_alive.run_lock.notify()
 
-
 def pad(data: bytes):
   """Zero padding for AES data encryption (non standard)."""
   new_size = math.ceil(len(data) / AES.block_size) * AES.block_size
   return data.ljust(new_size, bytes([0]))
-
 
 def unpad(data: bytes):
   """Remove Zero padding for AES data encryption (non standard)."""
@@ -571,8 +570,8 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
     self.wfile.write(json.dumps(data).encode('utf-8'))
 
   _HANDLERS_MAP = {
-    '/hisense/status': get_status_handler,
-    '/hisense/command': queue_command_handler,
+    '/status': get_status_handler,
+    '/command': queue_command_handler,
     '/local_lan/key_exchange.json': key_exchange_handler,
     '/local_lan/commands.json': command_handler,
     '/local_lan/property/datapoint.json': property_update_handler,
@@ -603,7 +602,6 @@ def ParseArguments() -> argparse.Namespace:
   arg_parser.add_argument('--config', required=True,
                           help='LAN Config file.')
   return arg_parser.parse_args()
-
 
 if __name__ == '__main__':
     _parsed_args = ParseArguments()  # type: argparse.Namespace
