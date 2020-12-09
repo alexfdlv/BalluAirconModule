@@ -1,5 +1,7 @@
 """
 HTTP Server for managing the Ballu air conditioner over a local network
+
+v1.0.0
 """
 
 __author__ = 'AlexFdlv@bk.ru (Alex Fdlv)'
