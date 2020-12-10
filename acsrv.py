@@ -1,7 +1,11 @@
 """
 HTTP Server for managing the Ballu air conditioner over a local network
 
-v1.0.0
+v1.0.1
+- удалены закоментированные строки вызывающие логирование
+- функции (pad, unpad), которые вызывались в encrypt_and_sign и decrypt_and_validate удалены, а функционал перемещен непосредственно в них
+- удалена функция hmac_digest, а обработка перемещена непосредственно в места вызова
+- в class Dimmer исправлены неправильно установленные значения ON OFF
 """
 
 __author__ = 'AlexFdlv@bk.ru (Alex Fdlv)'
@@ -16,8 +20,6 @@ from http.client import HTTPConnection, InvalidURL
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from http import HTTPStatus
 import json
-import logging
-import logging.handlers
 import math
 import paho.mqtt.client as mqtt
 import queue
@@ -59,14 +61,11 @@ class Encryption:
 
   @classmethod
   def _build_key(cls, lanip_key: bytes, msg: bytes) -> bytes:
-    return cls.hmac_digest(lanip_key, cls.hmac_digest(lanip_key, msg) + msg)
-  
-  @staticmethod
-  def hmac_digest(key: bytes, msg: bytes) -> bytes:
-    return hmac.digest(key, msg, 'sha256')
+    return hmac.digest(lanip_key, hmac.digest(lanip_key, msg, 'sha256') + msg, 'sha256')
 
 @dataclass
 class Config:
+  '''Класс набора ключей шифрования/дешифрования'''
   lan_config: LanConfig
   app: Encryption
   dev: Encryption
@@ -119,8 +118,8 @@ class AirFlow(enum.Enum):
   OFF = 0
   ON = 1
 class Dimmer(enum.Enum):
-  ON = 0
-  OFF = 1
+  OFF = 0
+  ON = 1  
 class DoubleFrequency(enum.Enum):
   OFF = 0
   ON = 1
@@ -193,7 +192,7 @@ class AcProperties(Properties):
   f_voltage: int = field(default=0, metadata={'base_type': 'integer', 'read_only': True})
   t_backlight: Dimmer = field(default=Dimmer.OFF, metadata={'base_type': 'boolean', 'read_only': False,
     'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: Dimmer[x]}})  # DimmerStatus
-  t_control_value: int = field(default=None, metadata={'base_type': 'integer', 'read_only': False})
+  # t_control_value: int = field(default=None, metadata={'base_type': 'integer', 'read_only': False})
   t_device_info: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': False})
   t_display_power: bool = field(default=None, metadata={'base_type': 'boolean', 'read_only': False})
   t_eco: Economy = field(default=Economy.OFF, metadata={'base_type': 'boolean', 'read_only': False,
@@ -226,7 +225,12 @@ class AcProperties(Properties):
 
 @dataclass
 class Data:
-  """The current data store: commands, updates and properties."""
+  """Текущее хранилище данных: команды, обновления и свойства.
+     
+     Содержит: очереди команд, счетчики, блокировки потоков,
+     свойства АС
+     Методы: получение свойств, обновление свойств при изменении  
+  """
   commands_queue = queue.Queue()
   commands_seq_no = 0
   commands_seq_no_lock = threading.Lock()
@@ -246,60 +250,16 @@ class Data:
       old_value = getattr(self.properties, name)
       if value != old_value:
         setattr(self.properties, name, value)
-        logging.debug('Updated properties: %s' % self.properties)
-
-
-def queue_command(name: str, value, recursive: bool = False) -> None:
-  if _data.properties.get_read_only(name):
-    raise Error('Cannot update read-only property "{}".'.format(name))
-  data_type = _data.properties.get_type(name)
-  base_type = _data.properties.get_base_type(name)
-  if issubclass(data_type, enum.Enum):
-    data_value = data_type[value].value
-  elif data_type is int and type(value) is str and '.' in value:
-    # Round rather than fail if the input is a float.
-    # This is commonly the case for temperatures converted by HA from Celsius.
-    data_value = round(float(value))
-  else:
-    data_value = data_type(value)
-  command = {
-    'properties': [{
-      'property': {
-        'base_type': base_type,
-        'name': name,
-        'value': data_value,
-        'id': ''.join(random.choices(string.ascii_letters + string.digits, k=8)),
-      }
-    }]
-  }
-  # There are (usually) no acks on commands, so also queue an update to the
-  # property, to be run once the command is sent.
-  typed_value = data_type[value] if issubclass(data_type, enum.Enum) else data_value
-  property_updater = lambda: _data.update_property(name, typed_value)
-  _data.commands_queue.put_nowait((command, property_updater))
-
-  # Handle turning on FastColdHeat
-  if name == 't_temp_heatcold' and typed_value is FastColdHeat.ON:
-    queue_command('t_fan_speed', 'AUTO', True)
-    queue_command('t_fan_mute', 'OFF', True)
-    queue_command('t_sleep', 'STOP', True)
-    queue_command('t_temp_eight', 'OFF', True)
-  if not recursive:
-    with _keep_alive.run_lock:
-      _keep_alive.run_lock.notify()
-
-def pad(data: bytes):
-  """Zero padding for AES data encryption (non standard)."""
-  new_size = math.ceil(len(data) / AES.block_size) * AES.block_size
-  return data.ljust(new_size, bytes([0]))
-
-def unpad(data: bytes):
-  """Remove Zero padding for AES data encryption (non standard)."""
-  return data.rstrip(bytes([0]))
 
 
 class KeepAliveThread(threading.Thread):
-  """Thread to preiodically generate keep-alive requests."""
+  """Поток для периодической отправки запросов на АС для поддержания связи.
+
+     Запросы представляют из себя POST или PUT запросы на АС с информацией
+     об этом сервере. Т.е. АС из этих запросов извлекает и сохраняет информацию
+     о том, куда в последствии отправлять данные, т.е. на этот сервер.
+     Периодичность по-умолчанию 10 секунд.  
+  """
   
   _KEEP_ALIVE_INTERVAL = 10.0
 
@@ -332,10 +292,9 @@ class KeepAliveThread(threading.Thread):
     }
     super(KeepAliveThread, self).__init__(name='Keep Alive thread')
 
-  @retry(exceptions=ConnectionError, delay=0.5, max_delay=20, backoff=1.5, logger=logging)
+  @retry(exceptions=ConnectionError, delay=0.5, max_delay=20, backoff=1.5)
   def _establish_connection(self, conn: HTTPConnection) -> None:
     method = 'PUT' if self._alive else 'POST'
-    logging.debug('%s /local_reg.json %s', method, json.dumps(self._json))
     try:
       conn.request(method, '/local_reg.json', json.dumps(self._json), self._headers)
       resp = conn.getresponse()
@@ -354,24 +313,21 @@ class KeepAliveThread(threading.Thread):
       try:
         conn = HTTPConnection(_parsed_args.ip, timeout=5)
       except InvalidURL:
-        logging.exception('Invalid IP provided.')
         _httpd.shutdown()
         return
       while True:
         try:
           self._establish_connection(conn)
         except:
-          logging.exception('Failed to send local_reg keep alive to the AC.')
           _httpd.shutdown()
           return
-        self._json['local_reg']['notify'] = int(
-            _data.commands_queue.qsize() > 0 or self.run_lock.wait(self._KEEP_ALIVE_INTERVAL))
+        self._json['local_reg']['notify'] = int(_data.commands_queue.qsize() > 0 or self.run_lock.wait(self._KEEP_ALIVE_INTERVAL))
 
 class QueryStatusThread(threading.Thread):
-  """Thread to preiodically query the status of all properties.
+  """Поток для постановки в очередь команд на запрос значений всех свойств АС.
   
-  After start-up, essentailly all updates should be pushed to the server due
-  to the keep alive, so this is just a belt and suspenders.
+     Очередь команд будет обработана только после запуска потока KeepAlive
+     и сервера HTTP для обмена данными с АС.
   """
   
   _STATUS_UPDATE_INTERVAL = 600.0
@@ -418,34 +374,25 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
 
   def do_GET(self) -> None:
     """Accepts get requests."""
-    logging.debug('GET Request,\nPath: %s\n', self.path)
     parsed_url = urlparse(self.path)
     query = parse_qs(parsed_url.query)
     handler = self._HANDLERS_MAP.get(parsed_url.path)
     if handler:
-      try:
-        handler(self, parsed_url.path, query, {})
-        return
-      except:
-        logging.exception('Failed to parse property.')
+      handler(self, parsed_url.path, query, {})
+      return
     self.do_HEAD(HTTPStatus.NOT_FOUND)
 
   def do_POST(self):
     """Accepts post requests."""
     content_length = int(self.headers['Content-Length'])
     post_data = self.rfile.read(content_length)
-    logging.debug('POST request,\nPath: %s\nHeaders:\n%s\n\nBody:\n%s\n',
-                  str(self.path), str(self.headers), post_data.decode('utf-8'))
     parsed_url = urlparse(self.path)
     query = parse_qs(parsed_url.query)
     data = json.loads(post_data)
     handler = self._HANDLERS_MAP.get(parsed_url.path)
     if handler:
-      try:
-        handler(self, parsed_url.path, query, data)
-        return
-      except:
-        logging.exception('Failed to parse property.')
+      handler(self, parsed_url.path, query, data)
+      return
     self.do_HEAD(HTTPStatus.NOT_FOUND)
 
   def key_exchange_handler(self, path: str, query: dict, data: dict) -> None:
@@ -463,12 +410,9 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
       _config.lan_config.random_1 = key['random_1']
       _config.lan_config.time_1 = key['time_1']
     except KeyError:
-      logging.error('Invalid key exchange: %r', data)
       self.do_HEAD(HTTPStatus.BAD_REQUEST)
       return
     if key['key_id'] != _config.lan_config.lanip_key_id:
-      logging.error('The key_id has been replaced!!\nOld ID was %d; new ID is %d.',
-                    _config.lan_config.lanip_key_id, key['key_id'])
       self.do_HEAD(HTTPStatus.NOT_FOUND)
       return
     _config.lan_config.random_2 = ''.join(
@@ -476,8 +420,7 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
     _config.lan_config.time_2 = time.monotonic_ns() % 2**40
     _config.update()
     self.do_HEAD(HTTPStatus.OK)
-    self._write_json({"random_2": _config.lan_config.random_2,
-                      "time_2": _config.lan_config.time_2})
+    self._write_json({"random_2": _config.lan_config.random_2,"time_2": _config.lan_config.time_2})
 
   def command_handler(self, path: str, query: dict, data: dict) -> None:
     """Handles a command request.
@@ -493,7 +436,7 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
     except queue.Empty:
       command['data'], property_updater = {}, None
     self.do_HEAD(HTTPStatus.OK)
-    self._write_json(self._encrypt_and_sign(command))
+    self._write_json(encrypt_and_sign(command))
     if property_updater:
       property_updater()
 
@@ -502,9 +445,8 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
     Decrypts, validates, and pushes the value into the local properties store.
     """
     try:
-      update = self._decrypt_and_validate(data)
+      update = decrypt_and_validate(data)
     except Error:
-      logging.exception('Failed to parse property.')
       self.do_HEAD(HTTPStatus.BAD_REQUEST)
       return
     self.do_HEAD(HTTPStatus.OK)
@@ -515,18 +457,11 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
       #                 (update['seq_no'], _data.updates_seq_no)) 
       #   return  # Old update
       _data.updates_seq_no = update['seq_no']
-    try:
-      if not update['data']:
-        logging.debug('No value returned for seq_no %d, likely an unsupported property key.',
-                      update['seq_no'])
-        return
-      name = update['data']['name']
-      data_type = _data.properties.get_type(name)
-      value = data_type(update['data']['value'])
-      _data.update_property(name, value)
-    except:
-      logging.exception('Failed to handle %s', update)
-
+    name = update['data']['name']
+    data_type = _data.properties.get_type(name)
+    value = data_type(update['data']['value'])
+    _data.update_property(name, value)
+    
   def get_status_handler(self, path: str, query: dict, data: dict) -> None:
     """Handles get status request (by a smart home hub).
     Returns the current internally stored state of the AC.
@@ -542,33 +477,13 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
     try:
       queue_command(query['property'][0], query['value'][0])
     except:
-      logging.exception('Failed to queue command.')
       self.do_HEAD(HTTPStatus.BAD_REQUEST)
       return
     self.do_HEAD(HTTPStatus.OK)
     self._write_json({'queued commands': _data.commands_queue.qsize()})
 
-  @staticmethod
-  def _encrypt_and_sign(data: dict) -> dict:
-    text = json.dumps(data).encode('utf-8')
-    logging.debug('Encrypting: %s', text.decode('utf-8'))
-    return {
-      "enc": base64.b64encode(_config.app.cipher.encrypt(pad(text))).decode('utf-8'),
-      "sign": base64.b64encode(Encryption.hmac_digest(_config.app.sign_key, text)).decode('utf-8')
-    }
-
-  @staticmethod
-  def _decrypt_and_validate(data: dict) -> dict:
-    text = unpad(_config.dev.cipher.decrypt(base64.b64decode(data['enc'])))
-    sign = base64.b64encode(Encryption.hmac_digest(_config.dev.sign_key, text)).decode('utf-8')
-    if sign != data['sign']:
-      raise Error('Invalid signature for %s!' % text.decode('utf-8'))
-    logging.info('Decrypted: %s', text.decode('utf-8'))
-    return json.loads(text.decode('utf-8'))
-
   def _write_json(self, data: dict) -> None:
     """Send out the provided data dict as JSON."""
-    logging.debug('Response:\n%s', json.dumps(data))
     self.wfile.write(json.dumps(data).encode('utf-8'))
 
   _HANDLERS_MAP = {
@@ -592,37 +507,100 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
   }
 
 
+def encrypt_and_sign(data: dict) -> dict:
+  '''Шифровка и подпись'''
+  text = json.dumps(data).encode('utf-8')
+  pad_text = text.ljust(math.ceil(len(text) / AES.block_size) * AES.block_size, bytes([0]))
+  return {
+    "enc": base64.b64encode(_config.app.cipher.encrypt(pad_text)).decode('utf-8'),
+    "sign": base64.b64encode(hmac.digest(_config.app.sign_key, text, 'sha256')).decode('utf-8')
+  }
+
+def decrypt_and_validate(data: dict) -> dict:
+  '''Расшифровка и проверка'''
+  text = _config.dev.cipher.decrypt(base64.b64decode(data['enc'])).rstrip(bytes([0]))
+  sign = base64.b64encode(hmac.digest(_config.dev.sign_key, text, 'sha256')).decode('utf-8')
+  if sign != data['sign']:
+    raise Error('Invalid signature for %s!' % text.decode('utf-8'))
+  return json.loads(text.decode('utf-8'))
+
+def queue_command(name: str, value, recursive: bool = False) -> None:
+  if _data.properties.get_read_only(name):
+    raise Error('Cannot update read-only property "{}".'.format(name))
+  data_type = _data.properties.get_type(name)
+  base_type = _data.properties.get_base_type(name)
+  if issubclass(data_type, enum.Enum):
+    data_value = data_type[value].value
+  elif data_type is int and type(value) is str and '.' in value:
+    # Round rather than fail if the input is a float.
+    # This is commonly the case for temperatures converted by HA from Celsius.
+    data_value = round(float(value))
+  else:
+    data_value = data_type(value)
+  command = {
+    'properties': [{
+      'property': {
+        'base_type': base_type,
+        'name': name,
+        'value': data_value,
+        'id': ''.join(random.choices(string.ascii_letters + string.digits, k=8)),
+      }
+    }]
+  }
+  # There are (usually) no acks on commands, so also queue an update to the
+  # property, to be run once the command is sent.
+  typed_value = data_type[value] if issubclass(data_type, enum.Enum) else data_value
+  property_updater = lambda: _data.update_property(name, typed_value)
+  _data.commands_queue.put_nowait((command, property_updater))
+
+  # Handle turning on FastColdHeat
+  if name == 't_temp_heatcold' and typed_value is FastColdHeat.ON:
+    queue_command('t_fan_speed', 'AUTO', True)
+    queue_command('t_fan_mute', 'OFF', True)
+    queue_command('t_sleep', 'STOP', True)
+    queue_command('t_temp_eight', 'OFF', True)
+  if not recursive:
+    with _keep_alive.run_lock:
+      _keep_alive.run_lock.notify()
+
 def ParseArguments() -> argparse.Namespace:
-  """Parse command line arguments."""
+  """Разбор аргументов командной строки.
+
+     Извлекает аргументы из командной строки.
+     Разбирает на составляющие и возвращает 
+     пространство имен Namespase с аргументами: 
+     Namespace(config='имя файла.json', ip='xxx.xxx.xxx.xxx', port=номер порта)
+  """
+ 
   arg_parser = argparse.ArgumentParser(
-      description='JSON server for HiSense air conditioners.',
+      description='JSON сервер для кондиционера Ballu.',
       allow_abbrev=False)
   arg_parser.add_argument('-p', '--port', required=True, type=int,
-                          help='Port for the server.')
+                          help='Порт сервера.')
   arg_parser.add_argument('--ip', required=True,
-                          help='IP address for the AC.')
+                          help='IP адрес кондиционера.')
   arg_parser.add_argument('--config', required=True,
-                          help='LAN Config file.')
+                          help='Имя файла .json с lanip_key.')
   return arg_parser.parse_args()
 
 if __name__ == '__main__':
-    _parsed_args = ParseArguments()  # type: argparse.Namespace
-
-    _config = Config()
+    _parsed_args = ParseArguments() # создание пространства имен с аргументами запуска  # type: argparse.Namespace
     
-    _data = Data(properties=AcProperties())
+    _config = Config() # создание объекта с набором ключей шифрования/дешифрования информации при обмене с АС
     
-    _keep_alive = None  # type: typing.Optional[KeepAliveThread]
+    _data = Data(properties=AcProperties()) # создание объекта хранилаща свойств АС с дефолтными значениями
+       
+    _keep_alive = None # удаление потока keep_alive type: typing.Optional[KeepAliveThread]
 
-    query_status = QueryStatusThread()
-    query_status.start()
+    query_status = QueryStatusThread() # создание потока - очередь запросов свойств АС
+    query_status.start() # запуск потока
 
-    _keep_alive = KeepAliveThread()
-    _keep_alive.start()
+    _keep_alive = KeepAliveThread() # создание потока поддержки связи с АС
+    _keep_alive.start() # запуск потока
 
-    _httpd = HTTPServer(('', _parsed_args.port), HTTPRequestHandler)
+    _httpd = HTTPServer(('', _parsed_args.port), HTTPRequestHandler) # создание http сервера, передача номера порта, на котором будет работать сервер и имя класса обработчика событий
     try:
-      _httpd.serve_forever()
+      _httpd.serve_forever() # запуск http сервера в потоке
     except KeyboardInterrupt:
       pass
-    _httpd.server_close()
+      _httpd.server_close() # остановка http сервера
