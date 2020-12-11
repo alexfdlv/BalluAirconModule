@@ -6,6 +6,9 @@ v1.0.1
 - функции (pad, unpad), которые вызывались в encrypt_and_sign и decrypt_and_validate удалены, а функционал перемещен непосредственно в них
 - удалена функция hmac_digest, а обработка перемещена непосредственно в места вызова
 - в class Dimmer исправлены неправильно установленные значения ON OFF
+
+v1.0.2
+- добавлена документация ко всем блокам
 """
 
 __author__ = 'AlexFdlv@bk.ru (Alex Fdlv)'
@@ -39,6 +42,7 @@ from Crypto.Cipher import AES
 @dataclass_json
 @dataclass
 class LanConfig:
+  '''Класс - Набор ключей полученных из файла json'''
   lanip_key: str
   lanip_key_id: int
   random_1: str
@@ -48,6 +52,7 @@ class LanConfig:
 
 @dataclass
 class Encryption:
+  '''Класс - Набор ключей шифрования созданных на основе lanip_key'''
   sign_key: bytes
   crypto_key: bytes
   iv_seed: bytes
@@ -61,11 +66,12 @@ class Encryption:
 
   @classmethod
   def _build_key(cls, lanip_key: bytes, msg: bytes) -> bytes:
+    '''Метод - создание ключа'''
     return hmac.digest(lanip_key, hmac.digest(lanip_key, msg, 'sha256') + msg, 'sha256')
 
 @dataclass
 class Config:
-  '''Класс набора ключей шифрования/дешифрования'''
+  '''Класс - Набор всех ключей: полученных из файла и шифрования/дешифрования'''
   lan_config: LanConfig
   app: Encryption
   dev: Encryption
@@ -76,12 +82,13 @@ class Config:
     self._update_encryption()
     
   def update(self):
-    """Updates the stored lan config, and encryption data."""
+    """Обновляет сохраненную в файле .json конфигурацию локальной сети и данные шифрования."""
     with open(_parsed_args.config, 'wb') as f:
       f.write(self.lan_config.to_json().encode('utf-8'))
     self._update_encryption()
 
   def _update_encryption(self):
+    '''Обновляет данные шифрования'''
     lanip_key = self.lan_config.lanip_key.encode('utf-8')
     random_1 = self.lan_config.random_1.encode('utf-8')
     random_2 = self.lan_config.random_2.encode('utf-8')
@@ -91,11 +98,12 @@ class Config:
     self.dev = Encryption(lanip_key, random_2 + random_1 + time_2 + time_1)
 
 class Error(Exception):
-  """Error class for AC handling."""
+  """Класс - ошибки обработчиков"""
   pass
 
 
 class FanSpeed(enum.IntEnum):
+  '''Названия статуса свойства на основе полученного числового значения свойства'''
   AUTO = 0
   LOWER = 5
   LOW = 6
@@ -103,66 +111,83 @@ class FanSpeed(enum.IntEnum):
   HIGH = 8
   HIGHER = 9
 class SleepMode(enum.IntEnum):
+  '''Названия статуса свойства на основе полученного числового значения свойства'''
   STOP = 0
   ONE = 1
   TWO = 2
   THREE = 3
   FOUR = 4
 class AcWorkMode(enum.IntEnum):
+  '''Названия статуса свойства на основе полученного числового значения свойства'''
   FAN = 0
   HEAT = 1
   COOL = 2
   DRY = 3
   AUTO = 4
 class AirFlow(enum.Enum):
+  '''Названия статуса свойства на основе полученного числового значения свойства'''
   OFF = 0
   ON = 1
 class Dimmer(enum.Enum):
+  '''Названия статуса свойства на основе полученного числового значения свойства'''
   OFF = 0
   ON = 1  
 class DoubleFrequency(enum.Enum):
+  '''Названия статуса свойства на основе полученного числового значения свойства'''
   OFF = 0
   ON = 1
 class Economy(enum.Enum):
+  '''Названия статуса свойства на основе полученного числового значения свойства'''
   OFF = 0
   ON = 1
 class EightHeat(enum.Enum):
+  '''Названия статуса свойства на основе полученного числового значения свойства'''
   OFF = 0
   ON = 1
 class FastColdHeat(enum.Enum):
+  '''Названия статуса свойства на основе полученного числового значения свойства'''
   OFF = 0
   ON = 1
 class Power(enum.Enum):
+  '''Названия статуса свойства на основе полученного числового значения свойства'''
   OFF = 0
   ON = 1
 class Quiet(enum.Enum):
+  '''Названия статуса свойства на основе полученного числового значения свойства'''
   OFF = 0
   ON = 1
 class TemperatureUnit(enum.Enum):
+  '''Названия статуса свойства на основе полученного числового значения свойства'''
   CELSIUS = 0
   FAHRENHEIT = 1
 
 
 class Properties(object):
+  '''Класс - получение свойств и их параметров'''
   @classmethod
   def _get_metadata(cls, attr: str):
+    '''Метод - получение метаданных'''
     return cls.__dataclass_fields__[attr].metadata
 
   @classmethod
   def get_type(cls, attr: str):
+    '''Метод - получение типа данных свойства'''
     return cls.__dataclass_fields__[attr].type
 
   @classmethod
   def get_base_type(cls, attr: str):
+    '''Метод - получение базового типа данных свойства'''
     return cls._get_metadata(attr)['base_type']
 
   @classmethod
   def get_read_only(cls, attr: str):
+    '''Метод - получение характеристики "только для чтения" свойства'''
     return cls._get_metadata(attr)['read_only']
 
 @dataclass_json
 @dataclass
 class AcProperties(Properties):
+  '''Класс - Набор свойств АС'''
   # ack_cmd: bool = field(default=None, metadata={'base_type': 'boolean', 'read_only': False})
   f_electricity: int = field(default=100, metadata={'base_type': 'integer', 'read_only': True})
   f_e_arkgrille: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
@@ -225,7 +250,7 @@ class AcProperties(Properties):
 
 @dataclass
 class Data:
-  """Текущее хранилище данных: команды, обновления и свойства.
+  """Класс - Текущее хранилище данных: команды, обновления и свойства.
      
      Содержит: очереди команд, счетчики, блокировки потоков,
      свойства АС
@@ -240,12 +265,12 @@ class Data:
   properties_lock = threading.Lock()
 
   def get_property(self, name: str):
-    """Get a stored property."""
+    """Метод - получение свойств из хранилища"""
     with self.properties_lock:
       return getattr(self.properties, name)
 
   def update_property(self, name: str, value) -> None:
-    """Update the stored properties, if changed."""
+    """Метод - обновление свойств в хранилище, если изменены"""
     with self.properties_lock:
       old_value = getattr(self.properties, name)
       if value != old_value:
@@ -294,6 +319,7 @@ class KeepAliveThread(threading.Thread):
 
   @retry(exceptions=ConnectionError, delay=0.5, max_delay=20, backoff=1.5)
   def _establish_connection(self, conn: HTTPConnection) -> None:
+    '''Метод - установка соединения (отправка запросов)'''
     method = 'PUT' if self._alive else 'POST'
     try:
       conn.request(method, '/local_reg.json', json.dumps(self._json), self._headers)
@@ -309,6 +335,7 @@ class KeepAliveThread(threading.Thread):
     self._alive = True
 
   def run(self) -> None:
+    '''Метод - Создание и установка соединения'''
     with self.run_lock:
       try:
         conn = HTTPConnection(_parsed_args.ip, timeout=5)
@@ -338,6 +365,7 @@ class QueryStatusThread(threading.Thread):
     super(QueryStatusThread, self).__init__(name='Query Status thread')
 
   def run(self) -> None:
+    '''Метод - для всех свойств АС формирование данных для запроса и постановка в очередь'''
     while True:
       # In case the AC is stuck, and not fetching commands, avoid flooding
       # the queue with status updates.
@@ -363,19 +391,20 @@ class QueryStatusThread(threading.Thread):
       time.sleep(self._STATUS_UPDATE_INTERVAL)
 
 class HTTPRequestHandler(BaseHTTPRequestHandler):
-  """Handler for AC related HTTP requests."""
+  """Класс - Обработчики запросов на этот http сервер"""
 
   def do_HEAD(self, code: HTTPStatus = HTTPStatus.OK) -> None:
-    """Return a JSON header."""
+    """Установка статуса ответа и заголовка ответа 'Content-type' """
     self.send_response(code)
     if code == HTTPStatus.OK:
       self.send_header('Content-type', 'application/json')
     self.end_headers()
 
   def do_GET(self) -> None:
-    """Accepts get requests."""
+    """Метод - Обработка GET запросов."""
     parsed_url = urlparse(self.path)
     query = parse_qs(parsed_url.query)
+    print(query)
     handler = self._HANDLERS_MAP.get(parsed_url.path)
     if handler:
       handler(self, parsed_url.path, query, {})
@@ -383,7 +412,7 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
     self.do_HEAD(HTTPStatus.NOT_FOUND)
 
   def do_POST(self):
-    """Accepts post requests."""
+    """Метод - Обработка POST запросов."""
     content_length = int(self.headers['Content-Length'])
     post_data = self.rfile.read(content_length)
     parsed_url = urlparse(self.path)
@@ -396,12 +425,16 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
     self.do_HEAD(HTTPStatus.NOT_FOUND)
 
   def key_exchange_handler(self, path: str, query: dict, data: dict) -> None:
-    """Handles a key exchange.
-    Accepts the AC's random and time and pass its own.
-    Note that a key encryption component is the lanip_key, mapped to the
-    lanip_key_id provided by the AC. This secret part is provided by HiSense
-    server. Fortunately the lanip_key_id (and lanip_key) are static for a given
-    AC.
+    """Метод - Обрабатывает обмен ключами.
+       
+       Срабатывает при POST запросе со стороны АС на адрес
+       /local_lan/key_exchange.json
+
+       Принимает rundom и time от АС и передает заново сгенерированные.
+       Обратите внимание, что ключевым компонентом шифрования является lanip_key, 
+       сопоставленный с lanip_key_id, предоставленным AC. 
+       Эта секретная часть предоставляется сервером HiSense. 
+       К счастью, lanip_key_id (и lanip_key) являются статическими для данного АС.
     """
     try:
       key = data['key_exchange']
@@ -423,9 +456,13 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
     self._write_json({"random_2": _config.lan_config.random_2,"time_2": _config.lan_config.time_2})
 
   def command_handler(self, path: str, query: dict, data: dict) -> None:
-    """Handles a command request.
-    Request arrives from the AC. takes a command from the queue,
-    builds the JSON, encrypts and signs it, and sends it to the AC.
+    """Метод - Обрабатывает запрос команды.
+
+       Срабатывает при GET запросе со стороны АС на адрес
+       /local_lan/commands.json
+
+      Запрос поступает от AC. Метод принимает команду из очереди,
+      формирует JSON, шифрует,подписывает его, и передает его в АС.
     """
     command = {}
     with _data.commands_seq_no_lock:
@@ -441,8 +478,12 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
       property_updater()
 
   def property_update_handler(self, path: str, query: dict, data: dict) -> None:
-    """Handles a property update request.
-    Decrypts, validates, and pushes the value into the local properties store.
+    """Метод - Обрабатывает запрос на обновление свойств.
+
+       Срабатывает при POST запросе со стороны АС на адрес
+       /local_lan/property/datapoint.json
+
+       Расшифровывает, проверяет и помещает значение в локальное хранилище свойств.
     """
     try:
       update = decrypt_and_validate(data)
@@ -463,8 +504,12 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
     _data.update_property(name, value)
     
   def get_status_handler(self, path: str, query: dict, data: dict) -> None:
-    """Handles get status request (by a smart home hub).
-    Returns the current internally stored state of the AC.
+    """Метод - Обрабатывает запрос на получение свойств.
+
+       Срабатывает при GET запросе со стороны браузера или умного дома на адрес
+       /status
+
+       Возвращает текущее внутренне сохраненное состояние АС из хранилища данных.
     """
     with _data.properties_lock:
       data = _data.properties.to_dict()
@@ -472,7 +517,12 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
     self._write_json(data)
 
   def queue_command_handler(self, path: str, query: dict, data: dict) -> None:
-    """Handles queue command request (by a smart home hub).
+    """Метод - Обрабатывает запрос на постановку в очередь команды для АС.
+
+       Срабатывает при GET запросе со стороны браузера или умного дома на адрес
+       /command
+
+       Разбирает запрос и отправляет в очередь команд свойства и значения, которое нужно изменить
     """
     try:
       queue_command(query['property'][0], query['value'][0])
@@ -483,7 +533,7 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
     self._write_json({'queued commands': _data.commands_queue.qsize()})
 
   def _write_json(self, data: dict) -> None:
-    """Send out the provided data dict as JSON."""
+    """Отправить данные в виде JSON."""
     self.wfile.write(json.dumps(data).encode('utf-8'))
 
   _HANDLERS_MAP = {
@@ -525,6 +575,12 @@ def decrypt_and_validate(data: dict) -> dict:
   return json.loads(text.decode('utf-8'))
 
 def queue_command(name: str, value, recursive: bool = False) -> None:
+  '''Метод - Формирование команды на изменение свойства АС и постановка в очередь
+  
+     Принимает имя свойства и его значение, формирует данные для отправки на АС
+     и ставит в очередь на исполнение.
+  '''
+
   if _data.properties.get_read_only(name):
     raise Error('Cannot update read-only property "{}".'.format(name))
   data_type = _data.properties.get_type(name)
@@ -571,7 +627,6 @@ def ParseArguments() -> argparse.Namespace:
      пространство имен Namespase с аргументами: 
      Namespace(config='имя файла.json', ip='xxx.xxx.xxx.xxx', port=номер порта)
   """
- 
   arg_parser = argparse.ArgumentParser(
       description='JSON сервер для кондиционера Ballu.',
       allow_abbrev=False)
@@ -582,6 +637,7 @@ def ParseArguments() -> argparse.Namespace:
   arg_parser.add_argument('--config', required=True,
                           help='Имя файла .json с lanip_key.')
   return arg_parser.parse_args()
+
 
 if __name__ == '__main__':
     _parsed_args = ParseArguments() # создание пространства имен с аргументами запуска  # type: argparse.Namespace
