@@ -404,7 +404,6 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
     """Метод - Обработка GET запросов."""
     parsed_url = urlparse(self.path)
     query = parse_qs(parsed_url.query)
-    print(query)
     handler = self._HANDLERS_MAP.get(parsed_url.path)
     if handler:
       handler(self, parsed_url.path, query, {})
