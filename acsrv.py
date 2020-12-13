@@ -14,6 +14,11 @@ v1.03
 - добавлена документация к строкам
 - добавлен вывод в консоль почти из всхе блоков для отслеживания алгоритма взаимодействия с АС
 - код получения локального IP выведен из KEEP_ALIVE в функцию get_local_ip 
+
+v1.04
+- свойства АС переведены на использование примитивыных типов данных
+- добавлены коментарии к свойствам АС, описание свойства и возможные значения
+- удалены субклассы свойств
 """
 
 
@@ -108,66 +113,6 @@ class Error(Exception):
   pass
 
 
-class FanSpeed(enum.IntEnum):
-  '''Названия статуса свойства на основе полученного числового значения свойства'''
-  AUTO = 0
-  LOWER = 5
-  LOW = 6
-  MEDIUM = 7
-  HIGH = 8
-  HIGHER = 9
-class SleepMode(enum.IntEnum):
-  '''Названия статуса свойства на основе полученного числового значения свойства'''
-  STOP = 0
-  ONE = 1
-  TWO = 2
-  THREE = 3
-  FOUR = 4
-class AcWorkMode(enum.IntEnum):
-  '''Названия статуса свойства на основе полученного числового значения свойства'''
-  FAN = 0
-  HEAT = 1
-  COOL = 2
-  DRY = 3
-  AUTO = 4
-class AirFlow(enum.Enum):
-  '''Названия статуса свойства на основе полученного числового значения свойства'''
-  OFF = 0
-  ON = 1
-class Dimmer(enum.Enum):
-  '''Названия статуса свойства на основе полученного числового значения свойства'''
-  OFF = 0
-  ON = 1  
-class DoubleFrequency(enum.Enum):
-  '''Названия статуса свойства на основе полученного числового значения свойства'''
-  OFF = 0
-  ON = 1
-class Economy(enum.Enum):
-  '''Названия статуса свойства на основе полученного числового значения свойства'''
-  OFF = 0
-  ON = 1
-class EightHeat(enum.Enum):
-  '''Названия статуса свойства на основе полученного числового значения свойства'''
-  OFF = 0
-  ON = 1
-class FastColdHeat(enum.Enum):
-  '''Названия статуса свойства на основе полученного числового значения свойства'''
-  OFF = 0
-  ON = 1
-class Power(enum.Enum):
-  '''Названия статуса свойства на основе полученного числового значения свойства'''
-  OFF = 0
-  ON = 1
-class Quiet(enum.Enum):
-  '''Названия статуса свойства на основе полученного числового значения свойства'''
-  OFF = 0
-  ON = 1
-class TemperatureUnit(enum.Enum):
-  '''Названия статуса свойства на основе полученного числового значения свойства'''
-  CELSIUS = 0
-  FAHRENHEIT = 1
-
-
 class Properties(object):
   '''Класс - получение свойств и их параметров'''
   @classmethod
@@ -194,63 +139,50 @@ class Properties(object):
 @dataclass
 class AcProperties(Properties):
   '''Класс - Набор свойств АС'''
-  f_electricity: int = field(default=100, metadata={'base_type': 'integer', 'read_only': True})
-  f_e_arkgrille: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_incoiltemp: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_incom: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_indisplay: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_ineeprom: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_inele: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_infanmotor: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_inhumidity: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_inkeys: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_inlow: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_intemp: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_invzero: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_outcoiltemp: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_outeeprom: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_outgastemp: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_outmachine2: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_outmachine: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_outtemp: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_outtemplow: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_push: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_filterclean: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_humidity: int = field(default=50, metadata={'base_type': 'integer', 'read_only': True})  # Humidity
-  f_power_display: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_temp_in: float = field(default=81.0, metadata={'base_type': 'decimal', 'read_only': True})  # EnvironmentTemperature (Fahrenheit)
-  f_voltage: int = field(default=0, metadata={'base_type': 'integer', 'read_only': True})
-  t_backlight: Dimmer = field(default=Dimmer.OFF, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: Dimmer[x]}})  # DimmerStatus
-  t_device_info: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': False})
-  t_display_power: bool = field(default=None, metadata={'base_type': 'boolean', 'read_only': False})
-  t_eco: Economy = field(default=Economy.OFF, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: Economy[x]}})
-  t_fan_leftright: AirFlow = field(default=AirFlow.OFF, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: AirFlow[x]}})  # HorizontalAirFlow
-  t_fan_mute: Quiet = field(default=Quiet.OFF, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: Quiet[x]}})  # QuiteModeStatus
-  t_fan_power: AirFlow = field(default=AirFlow.OFF, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: AirFlow[x]}})  # VerticalAirFlow
-  t_fan_speed: FanSpeed = field(default=FanSpeed.AUTO, metadata={'base_type': 'integer', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: FanSpeed[x]}})  # FanSpeed
-  t_ftkt_start: int = field(default=None, metadata={'base_type': 'integer', 'read_only': False})
-  t_power: Power = field(default=Power.ON, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: Power[x]}})  # PowerStatus
-  t_run_mode: DoubleFrequency = field(default=DoubleFrequency.OFF, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: DoubleFrequency[x]}})  # DoubleFrequency
-  t_setmulti_value: int = field(default=None, metadata={'base_type': 'integer', 'read_only': False})
-  t_sleep: SleepMode = field(default=SleepMode.STOP, metadata={'base_type': 'integer', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: SleepMode[x]}})  # SleepMode
-  t_temp: int = field(default=81, metadata={'base_type': 'integer', 'read_only': False})  # CurrentTemperature
-  t_temptype: TemperatureUnit = field(default=TemperatureUnit.FAHRENHEIT, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: TemperatureUnit[x]}})  # CurrentTemperatureUnit
-  t_temp_eight: EightHeat = field(default=EightHeat.OFF, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: EightHeat[x]}})  # EightHeatStatus
-  t_temp_heatcold: FastColdHeat = field(default=FastColdHeat.OFF, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: FastColdHeat[x]}})  # FastCoolHeatStatus
-  t_work_mode: AcWorkMode = field(default=AcWorkMode.AUTO, metadata={'base_type': 'integer', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: AcWorkMode[x]}})  # WorkModeStatus
+  f_electricity: int = field(default=0, metadata={'base_type': 'integer', 'read_only': True}) #Потребляемая мощьность, Ватт
+  f_e_arkgrille: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Тревога от защиты решетки радиатора (0 - норм / 1 - неисправность)
+  f_e_incoiltemp: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Неисправность датчика температуры внутренней катушки (0 - норм / 1 - неисправность)
+  f_e_incom: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Неисправность связи внутреннего и внешнего блоков (0 - норм / 1 - неисправность)
+  f_e_indisplay: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Неисправность связи между внутренней панелью управления и панелью дисплея (0 - норм / 1 - неисправность)
+  f_e_ineeprom: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Ошибка в EEPROM внутренней панели управления (0 - норм / 1 - неисправность)
+  f_e_inele: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Неисправность связи между внутренней панелью управления и внутренней панелью питания (0 - норм / 1 - неисправность)
+  f_e_infanmotor: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Ненормальная работа двигателя внутреннего вентилятора (0 - норм / 1 - неисправность)
+  f_e_inhumidity: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Неисправность датчика влажности в помещении (0 - норм / 1 - неисправность)
+  f_e_inkeys: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Неисправность связи между внутренней панелью управления и клавиатурой (0 - норм / 1 - неисправность)
+  f_e_inlow: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #неизвестно -  (0 - норм / 1 - неисправность)
+  f_e_intemp: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Неисправность датчика температуры в помещении (0 - норм / 1 - неисправность)
+  f_e_invzero: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Неисправность, обнаруженная при обнаружении перехода напряжения внутри помещения через ноль (0 - норм / 1 - неисправность)
+  f_e_outcoiltemp: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Неисправность датчика температуры в наружной катушке (0 - норм / 1 - неисправность)
+  f_e_outeeprom: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Ошибка внешней EEPROM (0 - норм / 1 - неисправность)
+  f_e_outgastemp: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Неисправность датчика температуры выхлопных газов (0 - норм / 1 - неисправность)
+  f_e_outmachine2: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #неизвестно -  (0 - норм / 1 - неисправность)
+  f_e_outmachine: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #неизвестно -  (0 - норм / 1 - неисправность)
+  f_e_outtemp: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Неисправность датчика температуры наружного воздуха (0 - норм / 1 - неисправность)
+  f_e_outtemplow: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #неизвестно -  (0 - норм / 1 - неисправность)
+  f_e_push: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Нарушена связь между панелью управления WiFi и внутренней панелью управления (0 - норм / 1 - неисправность)
+  f_filterclean: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Необходимость очистки фильтра (0 - нет / 1 - да)
+  f_humidity: int = field(default=50, metadata={'base_type': 'integer', 'read_only': True})  #Относительная влажность, %
+  f_power_display: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #неизвестно
+  f_temp_in: float = field(default=81.0, metadata={'base_type': 'decimal', 'read_only': True})  #Температура окружающего воздуха, градусы Фаренгейт
+  f_voltage: int = field(default=0, metadata={'base_type': 'integer', 'read_only': True}) #неизвестно
+  t_backlight: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': False})  #Подсветка дисплея на внутреннем блоке (0 - ВЫКЛ / 1 - ВКЛ)
+  t_device_info: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': False}) #неизвестно
+  t_display_power: bool = field(default=None, metadata={'base_type': 'boolean', 'read_only': False}) #неизвестно
+  t_eco: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': False}) #Экономичный режим (0 - ВЫКЛ / 1 - ВКЛ)
+  t_fan_leftright: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': False}) #Работа шторок изменения горизонтального направления потока (0 - ВЫКЛ / 1 - ВКЛ)
+  t_fan_mute: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': False})  #Тихий режим (0 - ВЫКЛ / 1 - ВКЛ)
+  t_fan_power: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': False})  #Работа шторок изменения вертикального направления потока (0 - ВЫКЛ / 1 - ВКЛ)
+  t_fan_speed: int = field(default=0, metadata={'base_type': 'integer', 'read_only': False})  # Скорость вентилятора (0 - авто / 5 - минимальная / 6 - низкая / 7 - средняя / 8 - высокая / 9 - максимальная)
+  t_ftkt_start: int = field(default=None, metadata={'base_type': 'integer', 'read_only': False}) #неизвестно
+  t_power: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': False})  #Работа кондиционера (0 - ВЫКЛ / 1 - ВКЛ)
+  t_run_mode: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': False})  #Режим запуска (Двойная частота) (0 - ВЫКЛ / 1 - ВКЛ)
+  t_setmulti_value: int = field(default=None, metadata={'base_type': 'integer', 'read_only': False}) #неизвестно
+  t_sleep: int = field(default=0, metadata={'base_type': 'integer', 'read_only': False})  #Спящий режим (0 - ВЫКЛЮЧЕН / 1 - режим №1 / 2 - режим №2 / 3 - режим №3 / 4 - режим №4)
+  t_temp: int = field(default=81, metadata={'base_type': 'integer', 'read_only': False})  #Текущая температура, градусы Фаренгейт
+  t_temptype: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': False})  #Единица измерения температуры (0 - Цельсий, 1 - Фаренгейт)
+  t_temp_eight: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': False})  #Восьмитепловой режим (0 - ВЫКЛ / 1 - ВКЛ)
+  t_temp_heatcold: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': False})  #Статус быстрого охлаждения/нагрева (0 - ВЫКЛ / 1 - ВКЛ)
+  t_work_mode: int = field(default=4, metadata={'base_type': 'integer', 'read_only': False})  #Режим работы кондиционера (0 - вентилятор / 1 - оборгрев / 2 - охлаждение / 3 - осушение / 4 - авто)
 
 @dataclass
 class Data:
@@ -365,8 +297,6 @@ class QueryStatusThread(threading.Thread):
   def run(self) -> None:
     '''Метод - для всех свойств АС формирование данных для запроса и постановка в очередь'''
     while True: # цикл без условия завершения (безконечный)
-      # In case the AC is stuck, and not fetching commands, avoid flooding
-      # the queue with status updates.
       # В случае, если AC застрял и не получает команды, избегайте наводнения очереди обновлениями состояния
       while _data.commands_queue.qsize() > 10: # пока очередь больше 10
         time.sleep(self._WAIT_FOR_EMPTY_QUEUE) # приостановить выполнение на _WAIT_FOR_EMPTY_QUEUE секунд
@@ -497,7 +427,6 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
       return # возврат (выход из метода)
     self.do_HEAD(HTTPStatus.OK) # Ответить на запрос со статусом ОК
     with _data.updates_seq_no_lock:
-      # Every once in a while the sequence number is zeroed out, so accept it.
       # Время от времени порядковый номер обнуляется, так что примите его.
       # if _data.updates_seq_no > update['seq_no'] and update['seq_no'] > 0:
       #   logging.error('Stale update found %d. Last update used is %d.',
@@ -589,21 +518,11 @@ def queue_command(name: str, value, recursive: bool = False) -> None:
      Принимает имя свойства и его значение, формирует данные для отправки на АС
      и ставит в очередь на исполнение.
   '''
-
   if _data.properties.get_read_only(name): # Если атрибут read-only свойства name = True
     raise Error('Cannot update read-only property "{}".'.format(name)) # Вызвать ошибку "Невозможно изменить свойство только для чтения"
   data_type = _data.properties.get_type(name) # получить тип данных значения свойства
   base_type = _data.properties.get_base_type(name) # получить базовый тип данных значения свойства
-  if issubclass(data_type, enum.Enum): # Если data_type класс является наследником класса enum.Enum
-    data_value = data_type[value].value # То значение взять из этого наследника и преобразовать значение в тип данных data_type
-  elif data_type is int and type(value) is str and '.' in value: # иначе если тип данных свойства int И тип значения str и есть '.' в значении
-    # Round rather than fail if the input is a float.
-    # This is commonly the case for temperatures converted by HA from Celsius.
-    # Округлить, если значение является числом с плавающей точной.
-    #  Так обычно бывает при преобразовании температуры из цельсия.
-    data_value = round(float(value)) # преобразовать значение в число с плавающей запятой и округлить
-  else: # иначе
-    data_value = data_type(value) # преобразовать значение в тип данных data_type
+  data_value = data_type(value) # преобразовать значение в тип данных data_type
   command = { # формирование команды для изменения
     'properties': [{
       'property': {
@@ -616,17 +535,16 @@ def queue_command(name: str, value, recursive: bool = False) -> None:
   }
   # В командах (как правило) нет acks, поэтому также ставьте в очередь обновление свойства, 
   # которое будет запущено после отправки команды
-  typed_value = data_type[value] if issubclass(data_type, enum.Enum) else data_value # создание значения необходимого типа
-  property_updater = lambda: _data.update_property(name, typed_value) # создание функции для обновления свойств в локальном хранилище
+  property_updater = lambda: _data.update_property(name, data_value) # создание функции для обновления свойств в локальном хранилище
   _data.commands_queue.put_nowait((command, property_updater)) # поместить в очередь команду и функцию для обновления свойств
   print('QUEUE_COMMAND***В очередь отправлена команда - ',command,'и property_updater', property_updater)
-  # Включение режима FastColdHeat
-  if name == 't_temp_heatcold' and typed_value is FastColdHeat.ON:
+  # Включение режима Быстрого охлаждения
+  if name == 't_temp_heatcold' and data_value == 1:
     # рекурсивно вызвать функцию (саму себя) для изменения четырех свойств
-    queue_command('t_fan_speed', 'AUTO', True)
-    queue_command('t_fan_mute', 'OFF', True)
-    queue_command('t_sleep', 'STOP', True)
-    queue_command('t_temp_eight', 'OFF', True)
+    queue_command('t_fan_speed', 0, True)
+    queue_command('t_fan_mute', 0, True)
+    queue_command('t_sleep', 0, True)
+    queue_command('t_temp_eight', 0, True)
   if not recursive: # если функция вызвана не рекурсивно
     with _keep_alive.run_lock: # заблокировать поток _keep_alive
       _keep_alive.run_lock.notify() # приостановить выполение keep_alive
