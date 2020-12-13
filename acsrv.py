@@ -9,7 +9,13 @@ v1.0.1
 
 v1.0.2
 - добавлена документация ко всем блокам
+
+v1.03
+- добавлена документация к строкам
+- добавлен вывод в консоль почти из всхе блоков для отслеживания алгоритма взаимодействия с АС
+- код получения локального IP выведен из KEEP_ALIVE в функцию get_local_ip 
 """
+
 
 __author__ = 'AlexFdlv@bk.ru (Alex Fdlv)'
 
@@ -188,7 +194,6 @@ class Properties(object):
 @dataclass
 class AcProperties(Properties):
   '''Класс - Набор свойств АС'''
-  # ack_cmd: bool = field(default=None, metadata={'base_type': 'boolean', 'read_only': False})
   f_electricity: int = field(default=100, metadata={'base_type': 'integer', 'read_only': True})
   f_e_arkgrille: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
   f_e_incoiltemp: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
@@ -217,7 +222,6 @@ class AcProperties(Properties):
   f_voltage: int = field(default=0, metadata={'base_type': 'integer', 'read_only': True})
   t_backlight: Dimmer = field(default=Dimmer.OFF, metadata={'base_type': 'boolean', 'read_only': False,
     'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: Dimmer[x]}})  # DimmerStatus
-  # t_control_value: int = field(default=None, metadata={'base_type': 'integer', 'read_only': False})
   t_device_info: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': False})
   t_display_power: bool = field(default=None, metadata={'base_type': 'boolean', 'read_only': False})
   t_eco: Economy = field(default=Economy.OFF, metadata={'base_type': 'boolean', 'read_only': False,
@@ -256,25 +260,25 @@ class Data:
      свойства АС
      Методы: получение свойств, обновление свойств при изменении  
   """
-  commands_queue = queue.Queue()
-  commands_seq_no = 0
+  commands_queue = queue.Queue() # объект - очередь команд
+  commands_seq_no = 0 # сброс счетчика seq_no
   commands_seq_no_lock = threading.Lock()
-  updates_seq_no = 0
+  updates_seq_no = 0 # сброс счетчика 
   updates_seq_no_lock = threading.Lock()
-  properties: Properties
-  properties_lock = threading.Lock()
+  properties: Properties # объект класса Properties
+  properties_lock = threading.Lock() # объект - блокиратор потока, для доступа к хранилищу свойств АС
 
   def get_property(self, name: str):
     """Метод - получение свойств из хранилища"""
-    with self.properties_lock:
-      return getattr(self.properties, name)
+    with self.properties_lock: # заблокировать поток для получения значения свойства АС из хранилища
+      return getattr(self.properties, name) # получение свойства из хранилища properties и возврат
 
   def update_property(self, name: str, value) -> None:
     """Метод - обновление свойств в хранилище, если изменены"""
-    with self.properties_lock:
-      old_value = getattr(self.properties, name)
-      if value != old_value:
-        setattr(self.properties, name, value)
+    with self.properties_lock: # заблокировать поток для обновления значения свойства АС из хранилища
+      old_value = getattr(self.properties, name) # получение свойства из хранилища properties
+      if value != old_value: # если новое значение не равно старому
+        setattr(self.properties, name, value) # запись свойства в хранилище properties
 
 
 class KeepAliveThread(threading.Thread):
@@ -285,31 +289,22 @@ class KeepAliveThread(threading.Thread):
      о том, куда в последствии отправлять данные, т.е. на этот сервер.
      Периодичность по-умолчанию 10 секунд.  
   """
-  
-  _KEEP_ALIVE_INTERVAL = 10.0
+
+  _KEEP_ALIVE_INTERVAL = 10.0 # интервал отправки сапросов, секундр
 
   def __init__(self):
-    self.run_lock = threading.Condition()
-    self._alive = False
-    sock = None
-    try:
-      sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-      sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-      sock.connect(('10.255.255.255', 1))
-      local_ip = sock.getsockname()[0]
-    finally:
-      if sock:
-        sock.close()
-    self._headers = {
+    self.run_lock = threading.Condition() # создание объекта состояния потока
+    self._alive = False # статус потока (живой - True / не живой - False)
+    self._headers = { # создание словаря для заговловка запроса
       'Accept': 'application/json',
       'Connection': 'Keep-Alive',
       'Content-Type': 'application/json',
       'Host': _parsed_args.ip,
       'Accept-Encoding': 'gzip'
     }
-    self._json = {
+    self._json = { # создание словаря для тела запроса
       'local_reg': {
-        'ip': local_ip,
+        'ip': get_local_ip(),
         'notify': 0,
         'port': _parsed_args.port,
         'uri': "/local_lan"
@@ -317,111 +312,119 @@ class KeepAliveThread(threading.Thread):
     }
     super(KeepAliveThread, self).__init__(name='Keep Alive thread')
 
-  @retry(exceptions=ConnectionError, delay=0.5, max_delay=20, backoff=1.5)
+  @retry(exceptions=ConnectionError, delay=0.5, max_delay=20, backoff=1.5) # декоратор для повторных попыток установки соединения
   def _establish_connection(self, conn: HTTPConnection) -> None:
     '''Метод - установка соединения (отправка запросов)'''
-    method = 'PUT' if self._alive else 'POST'
+    method = 'PUT' if self._alive else 'POST' # выбор метода для запросов (PUT, если поток запросов живой, иначе POST)
     try:
-      conn.request(method, '/local_reg.json', json.dumps(self._json), self._headers)
-      resp = conn.getresponse()
-      if resp.status != HTTPStatus.ACCEPTED:
-        raise ConnectionError('Recieved invalid response for local_reg: ' + repr(resp))
-      resp.read()
+      conn.request(method, '/local_reg.json', json.dumps(self._json), self._headers) # отправить запрос (метод, УРЛ, тело, заголовок)
+      resp = conn.getresponse() # получить ответ
+      print('KA***Отправлены рег данные методом',method,' получен ответ',resp.status)
+      if resp.status != HTTPStatus.ACCEPTED: # если статус ответа не равен ACCEPTED
+        raise ConnectionError('Recieved invalid response for local_reg: ' + repr(resp)) # 
+      resp.read() # прочитать ответ
     except:
-      self._alive = False
+      self._alive = False # установить статус потока - не живой (если ответ от АС был не ACCEPTED)
       raise
     finally:
-      conn.close()
-    self._alive = True
+      conn.close() # закрыть соединение
+    self._alive = True # установить статус потока - живой
 
   def run(self) -> None:
     '''Метод - Создание и установка соединения'''
-    with self.run_lock:
+    with self.run_lock: # заблокировать поток
       try:
-        conn = HTTPConnection(_parsed_args.ip, timeout=5)
-      except InvalidURL:
-        _httpd.shutdown()
-        return
-      while True:
+        conn = HTTPConnection(_parsed_args.ip, timeout=5) # создать соединение
+      except InvalidURL: # если было исключение "неверный URL"
+        _httpd.shutdown() # выключить http сервер
+        return # возврат (выход из метода)
+      while True: # цикл без условия завершения (безконечный)
         try:
-          self._establish_connection(conn)
-        except:
-          _httpd.shutdown()
-          return
-        self._json['local_reg']['notify'] = int(_data.commands_queue.qsize() > 0 or self.run_lock.wait(self._KEEP_ALIVE_INTERVAL))
+          self._establish_connection(conn) # выполнить метод - установка соединения
+        except: # если были исключения
+          _httpd.shutdown() # выключить http сервер
+          return # возврат (выход из метода)
+        self._json['local_reg']['notify'] = int(_data.commands_queue.qsize() > 0 or self.run_lock.wait(self._KEEP_ALIVE_INTERVAL)) #!!!ToDo записать число (разобраться как вычисляется) в тело запроса, в параметр notify (уведомлене) (разобраться зачем)
 
 class QueryStatusThread(threading.Thread):
   """Поток для постановки в очередь команд на запрос значений всех свойств АС.
-  
+     
+     Работает автономно. Ни откуда не вызывается. Каждые 600сек ставит в очередь 
+     запрос всех свойств. 
      Очередь команд будет обработана только после запуска потока KeepAlive
      и сервера HTTP для обмена данными с АС.
   """
   
-  _STATUS_UPDATE_INTERVAL = 600.0
-  _WAIT_FOR_EMPTY_QUEUE = 10.0
+  _STATUS_UPDATE_INTERVAL = 600.0 # интервал обновления состояния, секунд
+  _WAIT_FOR_EMPTY_QUEUE = 10.0 # ожидание пустой очереди, секунд
 
   def __init__(self):
-    self._next_command_id = 0
+    self._next_command_id = 0 # id команды
     super(QueryStatusThread, self).__init__(name='Query Status thread')
 
   def run(self) -> None:
     '''Метод - для всех свойств АС формирование данных для запроса и постановка в очередь'''
-    while True:
+    while True: # цикл без условия завершения (безконечный)
       # In case the AC is stuck, and not fetching commands, avoid flooding
       # the queue with status updates.
-      while _data.commands_queue.qsize() > 10:
-        time.sleep(self._WAIT_FOR_EMPTY_QUEUE)
-      for data_field in fields(_data.properties):
-        command = {
+      # В случае, если AC застрял и не получает команды, избегайте наводнения очереди обновлениями состояния
+      while _data.commands_queue.qsize() > 10: # пока очередь больше 10
+        time.sleep(self._WAIT_FOR_EMPTY_QUEUE) # приостановить выполнение на _WAIT_FOR_EMPTY_QUEUE секунд
+      for data_field in fields(_data.properties): # для всех свойств АС из хранилища свойств
+        command = { # формирование команды для запроса свойства у АС
           'cmds': [{
             'cmd': {
-              'method': 'GET',
-              'resource': 'property.json?name=' + data_field.name,
-              'uri': '/local_lan/property/datapoint.json',
+              'method': 'GET', # метод запроса
+              'resource': 'property.json?name=' + data_field.name, # запрос определенного свойства АС
+              'uri': '/local_lan/property/datapoint.json', # адрес для ответа
               'data': '',
-              'cmd_id': self._next_command_id,
+              'cmd_id': self._next_command_id, # id команды
             }
           }]
         }
-        self._next_command_id += 1
-        _data.commands_queue.put_nowait((command, None))
-      if _keep_alive:
-        with _keep_alive.run_lock:
-          _keep_alive.run_lock.notify()
-      time.sleep(self._STATUS_UPDATE_INTERVAL)
+        self._next_command_id += 1 # увеличить id команды на 1
+        _data.commands_queue.put_nowait((command, None)) # поставить словарь comand, и "ничего" в очередь
+        print('QS***команда отправлена в очередь:',command)
+      if _keep_alive: # если существует поток _keep_alive
+        with _keep_alive.run_lock: # заблокировать поток
+          _keep_alive.run_lock.notify() #!!!ToDo что-то уведомить в потоке
+      time.sleep(self._STATUS_UPDATE_INTERVAL) # приостановить цикл на _STATUS_UPDATE_INTERVAL секунд
 
 class HTTPRequestHandler(BaseHTTPRequestHandler):
   """Класс - Обработчики запросов на этот http сервер"""
 
   def do_HEAD(self, code: HTTPStatus = HTTPStatus.OK) -> None:
     """Установка статуса ответа и заголовка ответа 'Content-type' """
-    self.send_response(code)
-    if code == HTTPStatus.OK:
-      self.send_header('Content-type', 'application/json')
-    self.end_headers()
+    print('HEAD***Статус ответа - ',code)
+    self.send_response(code) # отправляет статус в ответ на запрос
+    if code == HTTPStatus.OK: # если статус = ОК:
+      self.send_header('Content-type', 'application/json') # задать в заголовке тип контента
+    self.end_headers() # завершение заголовка
 
   def do_GET(self) -> None:
     """Метод - Обработка GET запросов."""
-    parsed_url = urlparse(self.path)
-    query = parse_qs(parsed_url.query)
-    handler = self._HANDLERS_MAP.get(parsed_url.path)
-    if handler:
-      handler(self, parsed_url.path, query, {})
-      return
-    self.do_HEAD(HTTPStatus.NOT_FOUND)
+    parsed_url = urlparse(self.path) # извлечение url, на который пришел GET запрос
+    query = parse_qs(parsed_url.query) # извлечение запроса в словарь из строки запроса
+    handler = self._HANDLERS_MAP.get(parsed_url.path) # получение обработчика на основе пути запроса из таблицы _HANDLERS_MAP
+    if handler: # если обработчик существует
+      print('GET***Получен GET запрос. Выбран обработчик -',handler.__name__,'. Передан запрос query - ',query)
+      handler(self, parsed_url.path, query, {}) # запуск обработчика и передача ему: пути, запроса, и пустого словаря с данными
+      return # возврат (выход из метода)
+    self.do_HEAD(HTTPStatus.NOT_FOUND) # ответить на запрос со статусом 404 (срабатывает, если обрабтчик не найден)
 
   def do_POST(self):
     """Метод - Обработка POST запросов."""
-    content_length = int(self.headers['Content-Length'])
-    post_data = self.rfile.read(content_length)
-    parsed_url = urlparse(self.path)
-    query = parse_qs(parsed_url.query)
-    data = json.loads(post_data)
-    handler = self._HANDLERS_MAP.get(parsed_url.path)
-    if handler:
-      handler(self, parsed_url.path, query, data)
-      return
-    self.do_HEAD(HTTPStatus.NOT_FOUND)
+    content_length = int(self.headers['Content-Length']) # получение длины контента из заголовка
+    post_data = self.rfile.read(content_length) # чтение данных длинной content_length
+    parsed_url = urlparse(self.path) # извлечение url, на который пришел POST запрос
+    query = parse_qs(parsed_url.query) # извлечение запроса в словарь из строки запроса
+    data = json.loads(post_data) # парсинг в словарь полученной JSON строки
+    handler = self._HANDLERS_MAP.get(parsed_url.path) # получение обработчика на основе пути запроса из таблицы _HANDLERS_MAP
+    if handler: # если обработчик существует
+      print('POST***Получен POST запрос. Выбран обработчик -',handler.__name__,'. query - ',query,'. data - ',data)
+      handler(self, parsed_url.path, query, data) # запуск обработчика и передача ему: пути, запроса, и данных
+      return # возврат (выход из метода)
+    self.do_HEAD(HTTPStatus.NOT_FOUND) # ответить на запрос со статусом 404 (срабатывает, если обрабтчик не найден)
 
   def key_exchange_handler(self, path: str, query: dict, data: dict) -> None:
     """Метод - Обрабатывает обмен ключами.
@@ -436,23 +439,24 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
        К счастью, lanip_key_id (и lanip_key) являются статическими для данного АС.
     """
     try:
-      key = data['key_exchange']
-      if key['ver'] != 1 or key['proto'] != 1 or key.get('sec'):
-        raise KeyError()
-      _config.lan_config.random_1 = key['random_1']
-      _config.lan_config.time_1 = key['time_1']
-    except KeyError:
-      self.do_HEAD(HTTPStatus.BAD_REQUEST)
-      return
-    if key['key_id'] != _config.lan_config.lanip_key_id:
-      self.do_HEAD(HTTPStatus.NOT_FOUND)
-      return
-    _config.lan_config.random_2 = ''.join(
-        random.choices(string.ascii_letters + string.digits, k=16))
-    _config.lan_config.time_2 = time.monotonic_ns() % 2**40
-    _config.update()
-    self.do_HEAD(HTTPStatus.OK)
-    self._write_json({"random_2": _config.lan_config.random_2,"time_2": _config.lan_config.time_2})
+      print('KEY_EXCH***Получены данные - ', data)
+      key = data['key_exchange'] # извлечение из полученных данных блока key_exchange
+      if key['ver'] != 1 or key['proto'] != 1 or key.get('sec'): # проверка допустимых значений
+        raise KeyError() # переход к except KeyError:
+      _config.lan_config.random_1 = key['random_1'] # чтение значения random_1 из кей и запись в хранилище lan_config
+      _config.lan_config.time_1 = key['time_1'] # чтение значения time_1 и запись в хранилище lan_config
+    except KeyError: # обраобтка исключения KeyError
+      self.do_HEAD(HTTPStatus.BAD_REQUEST) # отправить в ответ статус BAD_REQUEST
+      return # возврат (выход из метода)
+    if key['key_id'] != _config.lan_config.lanip_key_id: # если значение key_id не равно значению lanip_key_id в хранилище lan_config
+      self.do_HEAD(HTTPStatus.NOT_FOUND) # отправить в ответ статус BAD_REQUEST
+      return # возврат (выход из метода)
+    _config.lan_config.random_2 = ''.join(random.choices(string.ascii_letters + string.digits, k=16)) # формирование значения random_2 и запись в хранилище lan_config
+    _config.lan_config.time_2 = time.monotonic_ns() % 2**40 # формирование значения time_2 и запись в хранилище lan_config
+    _config.update() # запись значений в файл .json
+    self.do_HEAD(HTTPStatus.OK) # отправить в ответ статус ОК
+    print('KEY_EXCH***В WJ отправлены данные - ',{"random_2": _config.lan_config.random_2,"time_2": _config.lan_config.time_2})
+    self._write_json({"random_2": _config.lan_config.random_2,"time_2": _config.lan_config.time_2}) # отправить в ответ JSON со значениями random_2 и time_2
 
   def command_handler(self, path: str, query: dict, data: dict) -> None:
     """Метод - Обрабатывает запрос команды.
@@ -463,18 +467,19 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
       Запрос поступает от AC. Метод принимает команду из очереди,
       формирует JSON, шифрует,подписывает его, и передает его в АС.
     """
-    command = {}
-    with _data.commands_seq_no_lock:
-      command['seq_no'] = _data.commands_seq_no
-      _data.commands_seq_no += 1
+    command = {} # создает пустой словарьь command
+    with _data.commands_seq_no_lock: #!!!ToDo что-то связанно с блокировкой потока (разобраться)
+      command['seq_no'] = _data.commands_seq_no # добавить в словарь ключ seq_no и присвоить ему значение счетчика _data.commands_seq_no
+      _data.commands_seq_no += 1 # увеличить значение счетчика на 1
     try:
-      command['data'], property_updater = _data.commands_queue.get_nowait()
-    except queue.Empty:
-      command['data'], property_updater = {}, None
-    self.do_HEAD(HTTPStatus.OK)
-    self._write_json(encrypt_and_sign(command))
-    if property_updater:
-      property_updater()
+      command['data'], property_updater = _data.commands_queue.get_nowait() # добавить в словарь command ключ data и присвоить ему значение взятое из очереди, так же взять из очереди значение для property_updater
+    except queue.Empty: # если очередь пустая
+      command['data'], property_updater = {}, None # в ключ data поместить пустой словарь, а в property_updater значение None (т.е. переменная property_updater как бы перестает существовать)
+    print('COMMAND_HANDLER***Отправлены данные на шифровку',command)
+    self.do_HEAD(HTTPStatus.OK) # отправить в ответ статус ОК   
+    self._write_json(encrypt_and_sign(command)) # зашифровать и подписать словарь command и отправить в ответ на запрос
+    if property_updater: # если property_updater существует
+      property_updater() # !!!ToDo разобраться что это за property_updater, нигде нет этой функции
 
   def property_update_handler(self, path: str, query: dict, data: dict) -> None:
     """Метод - Обрабатывает запрос на обновление свойств.
@@ -485,22 +490,24 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
        Расшифровывает, проверяет и помещает значение в локальное хранилище свойств.
     """
     try:
-      update = decrypt_and_validate(data)
-    except Error:
-      self.do_HEAD(HTTPStatus.BAD_REQUEST)
-      return
-    self.do_HEAD(HTTPStatus.OK)
+      update = decrypt_and_validate(data) # расшифровать, проверить data и записать в update
+      print('PROPERTY_UPDATE_HANDLER***Получены данные с шифровки',update)
+    except Error: # если ошибка
+      self.do_HEAD(HTTPStatus.BAD_REQUEST) # Ответить на запрос со статусом BAD_REQUEST
+      return # возврат (выход из метода)
+    self.do_HEAD(HTTPStatus.OK) # Ответить на запрос со статусом ОК
     with _data.updates_seq_no_lock:
       # Every once in a while the sequence number is zeroed out, so accept it.
+      # Время от времени порядковый номер обнуляется, так что примите его.
       # if _data.updates_seq_no > update['seq_no'] and update['seq_no'] > 0:
       #   logging.error('Stale update found %d. Last update used is %d.',
       #                 (update['seq_no'], _data.updates_seq_no)) 
       #   return  # Old update
-      _data.updates_seq_no = update['seq_no']
-    name = update['data']['name']
-    data_type = _data.properties.get_type(name)
-    value = data_type(update['data']['value'])
-    _data.update_property(name, value)
+      _data.updates_seq_no = update['seq_no'] #!!!ToDo записать значение seq_no в updates_seq_no (Зачем? разобраться)
+    name = update['data']['name'] # получение имени свойства
+    data_type = _data.properties.get_type(name) # получение типа данных для имени свойства из хранилища свойств
+    value = data_type(update['data']['value']) # привести значение свойства к нужному типу данных
+    _data.update_property(name, value) # передать свойство и значение в хранилище
     
   def get_status_handler(self, path: str, query: dict, data: dict) -> None:
     """Метод - Обрабатывает запрос на получение свойств.
@@ -510,10 +517,11 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
 
        Возвращает текущее внутренне сохраненное состояние АС из хранилища данных.
     """
-    with _data.properties_lock:
-      data = _data.properties.to_dict()
-    self.do_HEAD(HTTPStatus.OK)
-    self._write_json(data)
+    with _data.properties_lock: # заблокировать обращение к потоку со свойствами
+      data = _data.properties.to_dict() # преобразовать набор свойств в словарь
+    print('GET_STATUS_HANDLER***В WJ отправлены данные - ',data)
+    self.do_HEAD(HTTPStatus.OK) # Ответить на запрос со статусом ОК
+    self._write_json(data) # Отправить ответ на запрос
 
   def queue_command_handler(self, path: str, query: dict, data: dict) -> None:
     """Метод - Обрабатывает запрос на постановку в очередь команды для АС.
@@ -524,16 +532,18 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
        Разбирает запрос и отправляет в очередь команд свойства и значения, которое нужно изменить
     """
     try:
-      queue_command(query['property'][0], query['value'][0])
-    except:
-      self.do_HEAD(HTTPStatus.BAD_REQUEST)
-      return
-    self.do_HEAD(HTTPStatus.OK)
-    self._write_json({'queued commands': _data.commands_queue.qsize()})
+      print('QUEUE_COMMAND_HANDLER***В QUEUE_COMMAND отправлены данные - ',query['property'][0], query['value'][0])
+      queue_command(query['property'][0], query['value'][0]) # Отправить свойство и значение на формирование команды и постановку в очередь команд
+    except: # если исключение
+      self.do_HEAD(HTTPStatus.BAD_REQUEST) # Ответить на запрос со статусом BAD_REQUEST
+      return # возврат (выход из метода)
+    self.do_HEAD(HTTPStatus.OK) # Ответить на запрос со статусом ОК
+    self._write_json({'queued commands': _data.commands_queue.qsize()}) # Отправить в ответ на запрос количество команд в очереди
 
   def _write_json(self, data: dict) -> None:
     """Отправить данные в виде JSON."""
-    self.wfile.write(json.dumps(data).encode('utf-8'))
+    self.wfile.write(json.dumps(data).encode('utf-8')) # Преобразовать (сериализовать) принятый словарь в строку JSON, кодировать в utf-8 и записать в тело ответа
+    print('WRITE_JSON*** - ',data)
 
   _HANDLERS_MAP = {
     '/status': get_status_handler,
@@ -580,19 +590,21 @@ def queue_command(name: str, value, recursive: bool = False) -> None:
      и ставит в очередь на исполнение.
   '''
 
-  if _data.properties.get_read_only(name):
-    raise Error('Cannot update read-only property "{}".'.format(name))
-  data_type = _data.properties.get_type(name)
-  base_type = _data.properties.get_base_type(name)
-  if issubclass(data_type, enum.Enum):
-    data_value = data_type[value].value
-  elif data_type is int and type(value) is str and '.' in value:
+  if _data.properties.get_read_only(name): # Если атрибут read-only свойства name = True
+    raise Error('Cannot update read-only property "{}".'.format(name)) # Вызвать ошибку "Невозможно изменить свойство только для чтения"
+  data_type = _data.properties.get_type(name) # получить тип данных значения свойства
+  base_type = _data.properties.get_base_type(name) # получить базовый тип данных значения свойства
+  if issubclass(data_type, enum.Enum): # Если data_type класс является наследником класса enum.Enum
+    data_value = data_type[value].value # То значение взять из этого наследника и преобразовать значение в тип данных data_type
+  elif data_type is int and type(value) is str and '.' in value: # иначе если тип данных свойства int И тип значения str и есть '.' в значении
     # Round rather than fail if the input is a float.
     # This is commonly the case for temperatures converted by HA from Celsius.
-    data_value = round(float(value))
-  else:
-    data_value = data_type(value)
-  command = {
+    # Округлить, если значение является числом с плавающей точной.
+    #  Так обычно бывает при преобразовании температуры из цельсия.
+    data_value = round(float(value)) # преобразовать значение в число с плавающей запятой и округлить
+  else: # иначе
+    data_value = data_type(value) # преобразовать значение в тип данных data_type
+  command = { # формирование команды для изменения
     'properties': [{
       'property': {
         'base_type': base_type,
@@ -602,21 +614,22 @@ def queue_command(name: str, value, recursive: bool = False) -> None:
       }
     }]
   }
-  # There are (usually) no acks on commands, so also queue an update to the
-  # property, to be run once the command is sent.
-  typed_value = data_type[value] if issubclass(data_type, enum.Enum) else data_value
-  property_updater = lambda: _data.update_property(name, typed_value)
-  _data.commands_queue.put_nowait((command, property_updater))
-
-  # Handle turning on FastColdHeat
+  # В командах (как правило) нет acks, поэтому также ставьте в очередь обновление свойства, 
+  # которое будет запущено после отправки команды
+  typed_value = data_type[value] if issubclass(data_type, enum.Enum) else data_value # создание значения необходимого типа
+  property_updater = lambda: _data.update_property(name, typed_value) # создание функции для обновления свойств в локальном хранилище
+  _data.commands_queue.put_nowait((command, property_updater)) # поместить в очередь команду и функцию для обновления свойств
+  print('QUEUE_COMMAND***В очередь отправлена команда - ',command,'и property_updater', property_updater)
+  # Включение режима FastColdHeat
   if name == 't_temp_heatcold' and typed_value is FastColdHeat.ON:
+    # рекурсивно вызвать функцию (саму себя) для изменения четырех свойств
     queue_command('t_fan_speed', 'AUTO', True)
     queue_command('t_fan_mute', 'OFF', True)
     queue_command('t_sleep', 'STOP', True)
     queue_command('t_temp_eight', 'OFF', True)
-  if not recursive:
-    with _keep_alive.run_lock:
-      _keep_alive.run_lock.notify()
+  if not recursive: # если функция вызвана не рекурсивно
+    with _keep_alive.run_lock: # заблокировать поток _keep_alive
+      _keep_alive.run_lock.notify() # приостановить выполение keep_alive
 
 def ParseArguments() -> argparse.Namespace:
   """Разбор аргументов командной строки.
@@ -637,22 +650,44 @@ def ParseArguments() -> argparse.Namespace:
                           help='Имя файла .json с lanip_key.')
   return arg_parser.parse_args()
 
+def get_local_ip():
+  '''Получение локального IP адреса
+  
+     Возвращает IP адрес сервера, на котором запущен модуль
+  '''
+  sock = None # пустой сокет
+  try:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) # создание объекта сокета
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1) # установка параметров сокета
+    sock.connect(('10.255.255.255', 1)) # подключение куда-то
+    local_ip = sock.getsockname()[0] # получение локального ip (ip на котором выполняется этот модуль)
+  finally:
+    if sock: # если сокет существует
+      sock.close() # закрыть сокет
+  return local_ip
+
 
 if __name__ == '__main__':
-    _parsed_args = ParseArguments() # создание пространства имен с аргументами запуска  # type: argparse.Namespace
+    _parsed_args = ParseArguments() # создание объекта с аргументами запуска  # type: argparse.Namespace
     
     _config = Config() # создание объекта с набором ключей шифрования/дешифрования информации при обмене с АС
-    
-    _data = Data(properties=AcProperties()) # создание объекта хранилаща свойств АС с дефолтными значениями
-       
-    _keep_alive = None # удаление потока keep_alive type: typing.Optional[KeepAliveThread]
+    print('MAIN***Создан объект _config:',_config)
 
+     
+    _data = Data(properties=AcProperties()) # создание объекта - хранилаща очереди команд, свойств АС с дефолтными значениями
+    print('MAIN***Создан объект _data:',_data)
+    
+    _keep_alive = None # удаление потока keep_alive type: typing.Optional[KeepAliveThread]
+    
+    print('MAIN***Запуск потока query_status:')
     query_status = QueryStatusThread() # создание потока - очередь запросов свойств АС
     query_status.start() # запуск потока
-
+        
+    print('MAIN***Запуск потока keep_alive:')
     _keep_alive = KeepAliveThread() # создание потока поддержки связи с АС
     _keep_alive.start() # запуск потока
-
+    
+    print('MAIN***Запуск сервера http:')
     _httpd = HTTPServer(('', _parsed_args.port), HTTPRequestHandler) # создание http сервера, передача номера порта, на котором будет работать сервер и имя класса обработчика событий
     try:
       _httpd.serve_forever() # запуск http сервера в потоке
