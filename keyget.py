@@ -232,10 +232,10 @@ if __name__ == '__main__':
   config = {
     'lanip_key': lanip['lanip_key'],
     'lanip_key_id': lanip['lanip_key_id'],
-    'random_1': '',
-    'time_1': 0,
-    'random_2': '',
-    'time_2': 0
+    # 'random_1': '',
+    # 'time_1': 0,
+    # 'random_2': '',
+    # 'time_2': 0
   }
   with open(args.config, 'w') as f:
     f.write(json.dumps(config))

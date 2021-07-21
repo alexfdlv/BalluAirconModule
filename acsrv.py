@@ -1,25 +1,18 @@
 """
 HTTP Server for managing the Ballu air conditioner over a local network
-
-v1.0.0
 """
-
 __author__ = 'AlexFdlv@bk.ru (Alex Fdlv)'
 
 import argparse
 import base64
 from dataclasses import dataclass, field, fields
 from dataclasses_json import dataclass_json
-import enum
 import hmac
 from http.client import HTTPConnection, InvalidURL
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from http import HTTPStatus
 import json
-import logging
-import logging.handlers
 import math
-import paho.mqtt.client as mqtt
 import queue
 import random
 from retry import retry
@@ -28,303 +21,180 @@ import string
 import sys
 import threading
 import time
-import typing
 from urllib.parse import parse_qs, urlparse, ParseResult
 
 from Crypto.Cipher import AES
 
 
-@dataclass_json
-@dataclass
-class LanConfig:
-  lanip_key: str
-  lanip_key_id: int
-  random_1: str
-  time_1: int
-  random_2: str
-  time_2: int
-
-@dataclass
 class Encryption:
-  sign_key: bytes
-  crypto_key: bytes
-  iv_seed: bytes
-  cipher: AES
-  
-  def __init__(self, lanip_key: bytes, msg: bytes):
-    self.sign_key = self._build_key(lanip_key, msg + b'0')
-    self.crypto_key = self._build_key(lanip_key, msg + b'1')
-    self.iv_seed = self._build_key(lanip_key, msg + b'2')[:AES.block_size]
-    self.cipher = AES.new(self.crypto_key, AES.MODE_CBC, self.iv_seed)
+  '''Класс - Шифрование и расшифровка данных'''
+  def __init__(self, lanip_key: str,lanip_key_id: int):
+    self.lanip_key = lanip_key.encode('utf-8')
+    self.lanip_key_id = lanip_key_id
 
-  @classmethod
-  def _build_key(cls, lanip_key: bytes, msg: bytes) -> bytes:
-    return cls.hmac_digest(lanip_key, cls.hmac_digest(lanip_key, msg) + msg)
-  
-  @staticmethod
-  def hmac_digest(key: bytes, msg: bytes) -> bytes:
-    return hmac.digest(key, msg, 'sha256')
-
-@dataclass
-class Config:
-  lan_config: LanConfig
-  app: Encryption
-  dev: Encryption
-  
-  def __init__(self):
-    with open(_parsed_args.config, 'rb') as f:
-      self.lan_config = LanConfig.from_json(f.read().decode('utf-8'))
-    self._update_encryption()
-    
   def update(self):
-    """Updates the stored lan config, and encryption data."""
-    with open(_parsed_args.config, 'wb') as f:
-      f.write(self.lan_config.to_json().encode('utf-8'))
-    self._update_encryption()
+    '''Обновляет методы шифрования/расшифровки и ключи проверки'''
+    self.random_2 = ''.join(random.choices(string.ascii_letters + string.digits, k=16)) # формирование значения random_2 и запись в хранилище lan_config
+    self.time_2 = time.monotonic_ns() % 2**40 # формирование значения time_2 и запись в хранилище lankeys
+    
+    app_msg = (self.random_1 + self.random_2 + str(self.time_1) + str(self.time_2)).encode('utf-8')
+    app_crypto_key = hmac.digest(self.lanip_key, hmac.digest(self.lanip_key, app_msg + b'1', 'sha256') + app_msg + b'1', 'sha256')
+    app_iv_seed = hmac.digest(self.lanip_key, hmac.digest(self.lanip_key, app_msg + b'2', 'sha256') + app_msg + b'2', 'sha256')[:AES.block_size]
+    self.app_sign_key = hmac.digest(self.lanip_key, hmac.digest(self.lanip_key, app_msg + b'0', 'sha256') + app_msg + b'0', 'sha256')
+    self.app_cipher = AES.new(app_crypto_key, AES.MODE_CBC, app_iv_seed)
+      
+    dev_msg = (self.random_2 + self.random_1 + str(self.time_2) + str(self.time_1)).encode('utf-8')
+    self.dev_sign_key = hmac.digest(self.lanip_key, hmac.digest(self.lanip_key, dev_msg + b'0', 'sha256') + dev_msg + b'0', 'sha256')
+    dev_crypto_key = hmac.digest(self.lanip_key, hmac.digest(self.lanip_key, dev_msg + b'1', 'sha256') + dev_msg + b'1', 'sha256')
+    dev_iv_seed = hmac.digest(self.lanip_key, hmac.digest(self.lanip_key, dev_msg + b'2', 'sha256') + dev_msg + b'2', 'sha256')[:AES.block_size]
+    self.dev_cipher = AES.new(dev_crypto_key, AES.MODE_CBC, dev_iv_seed)
 
-  def _update_encryption(self):
-    lanip_key = self.lan_config.lanip_key.encode('utf-8')
-    random_1 = self.lan_config.random_1.encode('utf-8')
-    random_2 = self.lan_config.random_2.encode('utf-8')
-    time_1 = str(self.lan_config.time_1).encode('utf-8')
-    time_2 = str(self.lan_config.time_2).encode('utf-8')
-    self.app = Encryption(lanip_key, random_1 + random_2 + time_1 + time_2)
-    self.dev = Encryption(lanip_key, random_2 + random_1 + time_2 + time_1)
+  def encrypt(self, data: dict) -> dict:
+    '''Шифрование и подпись'''
+    text = json.dumps(data).encode('utf-8')
+    pad_text = text.ljust(math.ceil(len(text) / AES.block_size) * AES.block_size, bytes([0]))
+    return {
+      "enc": base64.b64encode(self.app_cipher.encrypt(pad_text)).decode('utf-8'),
+      "sign": base64.b64encode(hmac.digest(self.app_sign_key, text, 'sha256')).decode('utf-8')
+    }
+
+  def decrypt(self, data: dict) -> dict:
+    '''Расшифровка и проверка'''
+    text = self.dev_cipher.decrypt(base64.b64decode(data['enc'])).rstrip(bytes([0]))
+    sign = base64.b64encode(hmac.digest(self.dev_sign_key, text, 'sha256')).decode('utf-8')
+    if sign != data['sign']:
+      raise Error('Invalid signature for %s!' % text.decode('utf-8'))
+    return json.loads(text.decode('utf-8'))
 
 class Error(Exception):
-  """Error class for AC handling."""
+  """Класс - ошибки обработчиков"""
   pass
 
-
-class FanSpeed(enum.IntEnum):
-  AUTO = 0
-  LOWER = 5
-  LOW = 6
-  MEDIUM = 7
-  HIGH = 8
-  HIGHER = 9
-class SleepMode(enum.IntEnum):
-  STOP = 0
-  ONE = 1
-  TWO = 2
-  THREE = 3
-  FOUR = 4
-class AcWorkMode(enum.IntEnum):
-  FAN = 0
-  HEAT = 1
-  COOL = 2
-  DRY = 3
-  AUTO = 4
-class AirFlow(enum.Enum):
-  OFF = 0
-  ON = 1
-class Dimmer(enum.Enum):
-  ON = 0
-  OFF = 1
-class DoubleFrequency(enum.Enum):
-  OFF = 0
-  ON = 1
-class Economy(enum.Enum):
-  OFF = 0
-  ON = 1
-class EightHeat(enum.Enum):
-  OFF = 0
-  ON = 1
-class FastColdHeat(enum.Enum):
-  OFF = 0
-  ON = 1
-class Power(enum.Enum):
-  OFF = 0
-  ON = 1
-class Quiet(enum.Enum):
-  OFF = 0
-  ON = 1
-class TemperatureUnit(enum.Enum):
-  CELSIUS = 0
-  FAHRENHEIT = 1
-
-
-class Properties(object):
+class Properties(): #object
+  '''Класс - получение свойств и их параметров'''
   @classmethod
   def _get_metadata(cls, attr: str):
+    '''Метод - получение метаданных'''
     return cls.__dataclass_fields__[attr].metadata
 
   @classmethod
   def get_type(cls, attr: str):
+    '''Метод - получение типа данных свойства'''
     return cls.__dataclass_fields__[attr].type
 
   @classmethod
   def get_base_type(cls, attr: str):
+    '''Метод - получение базового типа данных свойства'''
     return cls._get_metadata(attr)['base_type']
 
   @classmethod
   def get_read_only(cls, attr: str):
+    '''Метод - получение характеристики "только для чтения" свойства'''
     return cls._get_metadata(attr)['read_only']
 
 @dataclass_json
 @dataclass
 class AcProperties(Properties):
-  # ack_cmd: bool = field(default=None, metadata={'base_type': 'boolean', 'read_only': False})
-  f_electricity: int = field(default=100, metadata={'base_type': 'integer', 'read_only': True})
-  f_e_arkgrille: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_incoiltemp: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_incom: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_indisplay: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_ineeprom: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_inele: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_infanmotor: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_inhumidity: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_inkeys: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_inlow: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_intemp: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_invzero: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_outcoiltemp: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_outeeprom: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_outgastemp: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_outmachine2: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_outmachine: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_outtemp: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_outtemplow: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_e_push: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_filterclean: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_humidity: int = field(default=50, metadata={'base_type': 'integer', 'read_only': True})  # Humidity
-  f_power_display: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True})
-  f_temp_in: float = field(default=81.0, metadata={'base_type': 'decimal', 'read_only': True})  # EnvironmentTemperature (Fahrenheit)
-  f_voltage: int = field(default=0, metadata={'base_type': 'integer', 'read_only': True})
-  t_backlight: Dimmer = field(default=Dimmer.OFF, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: Dimmer[x]}})  # DimmerStatus
-  t_control_value: int = field(default=None, metadata={'base_type': 'integer', 'read_only': False})
-  t_device_info: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': False})
-  t_display_power: bool = field(default=None, metadata={'base_type': 'boolean', 'read_only': False})
-  t_eco: Economy = field(default=Economy.OFF, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: Economy[x]}})
-  t_fan_leftright: AirFlow = field(default=AirFlow.OFF, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: AirFlow[x]}})  # HorizontalAirFlow
-  t_fan_mute: Quiet = field(default=Quiet.OFF, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: Quiet[x]}})  # QuiteModeStatus
-  t_fan_power: AirFlow = field(default=AirFlow.OFF, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: AirFlow[x]}})  # VerticalAirFlow
-  t_fan_speed: FanSpeed = field(default=FanSpeed.AUTO, metadata={'base_type': 'integer', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: FanSpeed[x]}})  # FanSpeed
-  t_ftkt_start: int = field(default=None, metadata={'base_type': 'integer', 'read_only': False})
-  t_power: Power = field(default=Power.ON, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: Power[x]}})  # PowerStatus
-  t_run_mode: DoubleFrequency = field(default=DoubleFrequency.OFF, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: DoubleFrequency[x]}})  # DoubleFrequency
-  t_setmulti_value: int = field(default=None, metadata={'base_type': 'integer', 'read_only': False})
-  t_sleep: SleepMode = field(default=SleepMode.STOP, metadata={'base_type': 'integer', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: SleepMode[x]}})  # SleepMode
-  t_temp: int = field(default=81, metadata={'base_type': 'integer', 'read_only': False})  # CurrentTemperature
-  t_temptype: TemperatureUnit = field(default=TemperatureUnit.FAHRENHEIT, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: TemperatureUnit[x]}})  # CurrentTemperatureUnit
-  t_temp_eight: EightHeat = field(default=EightHeat.OFF, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: EightHeat[x]}})  # EightHeatStatus
-  t_temp_heatcold: FastColdHeat = field(default=FastColdHeat.OFF, metadata={'base_type': 'boolean', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: FastColdHeat[x]}})  # FastCoolHeatStatus
-  t_work_mode: AcWorkMode = field(default=AcWorkMode.AUTO, metadata={'base_type': 'integer', 'read_only': False,
-    'dataclasses_json': {'encoder': lambda x: x.name, 'decoder': lambda x: AcWorkMode[x]}})  # WorkModeStatus
+  '''Класс - Набор свойств АС'''
+  f_electricity: int = field(default=0, metadata={'base_type': 'integer', 'read_only': True}) #Потребляемая мощьность, Ватт
+  f_e_arkgrille: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Тревога от защиты решетки радиатора (0 - норм / 1 - неисправность)
+  f_e_incoiltemp: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Неисправность датчика температуры внутренней катушки (0 - норм / 1 - неисправность)
+  f_e_incom: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Неисправность связи внутреннего и внешнего блоков (0 - норм / 1 - неисправность)
+  f_e_indisplay: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Неисправность связи между внутренней панелью управления и панелью дисплея (0 - норм / 1 - неисправность)
+  f_e_ineeprom: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Ошибка в EEPROM внутренней панели управления (0 - норм / 1 - неисправность)
+  f_e_inele: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Неисправность связи между внутренней панелью управления и внутренней панелью питания (0 - норм / 1 - неисправность)
+  f_e_infanmotor: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Ненормальная работа двигателя внутреннего вентилятора (0 - норм / 1 - неисправность)
+  f_e_inhumidity: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Неисправность датчика влажности в помещении (0 - норм / 1 - неисправность)
+  f_e_inkeys: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Неисправность связи между внутренней панелью управления и клавиатурой (0 - норм / 1 - неисправность)
+  f_e_inlow: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #неизвестно -  (0 - норм / 1 - неисправность)
+  f_e_intemp: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Неисправность датчика температуры в помещении (0 - норм / 1 - неисправность)
+  f_e_invzero: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Неисправность, обнаруженная при обнаружении перехода напряжения внутри помещения через ноль (0 - норм / 1 - неисправность)
+  f_e_outcoiltemp: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Неисправность датчика температуры в наружной катушке (0 - норм / 1 - неисправность)
+  f_e_outeeprom: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Ошибка внешней EEPROM (0 - норм / 1 - неисправность)
+  f_e_outgastemp: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Неисправность датчика температуры выхлопных газов (0 - норм / 1 - неисправность)
+  f_e_outmachine2: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #неизвестно -  (0 - норм / 1 - неисправность)
+  f_e_outmachine: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #неизвестно -  (0 - норм / 1 - неисправность)
+  f_e_outtemp: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Неисправность датчика температуры наружного воздуха (0 - норм / 1 - неисправность)
+  f_e_outtemplow: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #неизвестно -  (0 - норм / 1 - неисправность)
+  f_e_push: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Нарушена связь между панелью управления WiFi и внутренней панелью управления (0 - норм / 1 - неисправность)
+  f_filterclean: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #Необходимость очистки фильтра (0 - нет / 1 - да)
+  f_humidity: int = field(default=50, metadata={'base_type': 'integer', 'read_only': True})  #Относительная влажность, %
+  f_power_display: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': True}) #неизвестно
+  f_temp_in: float = field(default=81.0, metadata={'base_type': 'decimal', 'read_only': True})  #Температура окружающего воздуха, градусы Фаренгейт
+  f_voltage: int = field(default=0, metadata={'base_type': 'integer', 'read_only': True}) #неизвестно
+  t_backlight: int = field(default=0, metadata={'base_type': 'boolean', 'read_only': False})  #Подсветка дисплея на внутреннем блоке (0 - ВЫКЛ / 1 - ВКЛ)
+  t_device_info: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': False}) #неизвестно
+  t_display_power: bool = field(default=None, metadata={'base_type': 'boolean', 'read_only': False}) #неизвестно
+  t_eco: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': False}) #Экономичный режим (0 - ВЫКЛ / 1 - ВКЛ)
+  t_fan_leftright: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': False}) #Работа шторок изменения горизонтального направления потока (0 - ВЫКЛ / 1 - ВКЛ)
+  t_fan_mute: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': False})  #Тихий режим (0 - ВЫКЛ / 1 - ВКЛ)
+  t_fan_power: int = field(default=0, metadata={'base_type': 'boolean', 'read_only': False})  #Работа шторок изменения вертикального направления потока (0 - ВЫКЛ / 1 - ВКЛ)
+  t_fan_speed: int = field(default=0, metadata={'base_type': 'integer', 'read_only': False})  # Скорость вентилятора (0 - авто / 5 - минимальная / 6 - низкая / 7 - средняя / 8 - высокая / 9 - максимальная)
+  t_ftkt_start: int = field(default=None, metadata={'base_type': 'integer', 'read_only': False}) #неизвестно
+  t_power: int = field(default=0, metadata={'base_type': 'boolean', 'read_only': False})  #Работа кондиционера (0 - ВЫКЛ / 1 - ВКЛ)
+  t_run_mode: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': False})  #Режим запуска (Двойная частота) (0 - ВЫКЛ / 1 - ВКЛ)
+  t_setmulti_value: int = field(default=None, metadata={'base_type': 'integer', 'read_only': False}) #неизвестно
+  t_sleep: int = field(default=0, metadata={'base_type': 'integer', 'read_only': False})  #Спящий режим (0 - ВЫКЛЮЧЕН / 1 - режим №1 / 2 - режим №2 / 3 - режим №3 / 4 - режим №4)
+  t_temp: int = field(default=81, metadata={'base_type': 'integer', 'read_only': False})  #Текущая температура, градусы Фаренгейт
+  t_temptype: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': False})  #Единица измерения температуры (0 - Цельсий, 1 - Фаренгейт)
+  t_temp_eight: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': False})  #Восьмитепловой режим (0 - ВЫКЛ / 1 - ВКЛ)
+  t_temp_heatcold: bool = field(default=0, metadata={'base_type': 'boolean', 'read_only': False})  #Статус быстрого охлаждения/нагрева (0 - ВЫКЛ / 1 - ВКЛ)
+  t_work_mode: int = field(default=4, metadata={'base_type': 'integer', 'read_only': False})  #Режим работы кондиционера (0 - вентилятор / 1 - оборгрев / 2 - охлаждение / 3 - осушение / 4 - авто)
 
 @dataclass
 class Data:
-  """The current data store: commands, updates and properties."""
-  commands_queue = queue.Queue()
-  commands_seq_no = 0
+  """Класс - Текущее хранилище данных: команды, обновления и свойства.
+     
+     Содержит: очереди команд, счетчики, блокировки потоков,
+     свойства АС
+     Методы: получение свойств, обновление свойств при изменении  
+  """
+  commands_queue = queue.Queue() # объект - очередь команд
+  commands_seq_no = 0 # сброс счетчика seq_no
   commands_seq_no_lock = threading.Lock()
-  updates_seq_no = 0
+  updates_seq_no = 0 # сброс счетчика 
   updates_seq_no_lock = threading.Lock()
-  properties: Properties
-  properties_lock = threading.Lock()
+  properties: Properties 
+  properties=AcProperties() # объект класса Properties
+  properties_lock = threading.Lock() # объект - блокиратор потока, для доступа к хранилищу свойств АС
 
   def get_property(self, name: str):
-    """Get a stored property."""
-    with self.properties_lock:
-      return getattr(self.properties, name)
+    """Метод - получение свойств из хранилища"""
+    with self.properties_lock: # заблокировать поток для получения значения свойства АС из хранилища
+      return getattr(self.properties, name) # получение свойства из хранилища properties и возврат
 
   def update_property(self, name: str, value) -> None:
-    """Update the stored properties, if changed."""
-    with self.properties_lock:
-      old_value = getattr(self.properties, name)
-      if value != old_value:
-        setattr(self.properties, name, value)
-        logging.debug('Updated properties: %s' % self.properties)
+    """Метод - обновление свойств в хранилище, если изменены"""
+    with self.properties_lock: # заблокировать поток для обновления значения свойства АС из хранилища
+      old_value = getattr(self.properties, name) # получение свойства из хранилища properties
+      if value != old_value: # если новое значение не равно старому
+        setattr(self.properties, name, value) # запись свойства в хранилище properties
 
-
-def queue_command(name: str, value, recursive: bool = False) -> None:
-  if _data.properties.get_read_only(name):
-    raise Error('Cannot update read-only property "{}".'.format(name))
-  data_type = _data.properties.get_type(name)
-  base_type = _data.properties.get_base_type(name)
-  if issubclass(data_type, enum.Enum):
-    data_value = data_type[value].value
-  elif data_type is int and type(value) is str and '.' in value:
-    # Round rather than fail if the input is a float.
-    # This is commonly the case for temperatures converted by HA from Celsius.
-    data_value = round(float(value))
-  else:
-    data_value = data_type(value)
-  command = {
-    'properties': [{
-      'property': {
-        'base_type': base_type,
-        'name': name,
-        'value': data_value,
-        'id': ''.join(random.choices(string.ascii_letters + string.digits, k=8)),
-      }
-    }]
-  }
-  # There are (usually) no acks on commands, so also queue an update to the
-  # property, to be run once the command is sent.
-  typed_value = data_type[value] if issubclass(data_type, enum.Enum) else data_value
-  property_updater = lambda: _data.update_property(name, typed_value)
-  _data.commands_queue.put_nowait((command, property_updater))
-
-  # Handle turning on FastColdHeat
-  if name == 't_temp_heatcold' and typed_value is FastColdHeat.ON:
-    queue_command('t_fan_speed', 'AUTO', True)
-    queue_command('t_fan_mute', 'OFF', True)
-    queue_command('t_sleep', 'STOP', True)
-    queue_command('t_temp_eight', 'OFF', True)
-  if not recursive:
-    with _keep_alive.run_lock:
-      _keep_alive.run_lock.notify()
-
-def pad(data: bytes):
-  """Zero padding for AES data encryption (non standard)."""
-  new_size = math.ceil(len(data) / AES.block_size) * AES.block_size
-  return data.ljust(new_size, bytes([0]))
-
-def unpad(data: bytes):
-  """Remove Zero padding for AES data encryption (non standard)."""
-  return data.rstrip(bytes([0]))
-
-
-class KeepAliveThread(threading.Thread):
-  """Thread to preiodically generate keep-alive requests."""
   
-  _KEEP_ALIVE_INTERVAL = 10.0
+class KeepAliveThread(threading.Thread):
+  """Поток для периодической отправки запросов на АС для поддержания связи.
+
+     Запросы представляют из себя POST или PUT запросы на АС с информацией
+     об этом сервере. Т.е. АС из этих запросов извлекает и сохраняет информацию
+     о том, куда в последствии отправлять данные, т.е. на этот сервер.
+     Периодичность по-умолчанию 10 секунд.  
+  """
+
+  _KEEP_ALIVE_INTERVAL = 10.0 # интервал отправки сапросов, секундр
 
   def __init__(self):
-    self.run_lock = threading.Condition()
-    self._alive = False
-    sock = None
-    try:
-      sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-      sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-      sock.connect(('10.255.255.255', 1))
-      local_ip = sock.getsockname()[0]
-    finally:
-      if sock:
-        sock.close()
-    self._headers = {
+    self.run_lock = threading.Condition() # создание объекта состояния потока
+    self._alive = False # статус потока (живой - True / не живой - False)
+    self._headers = { # создание словаря для заговловка запроса
       'Accept': 'application/json',
       'Connection': 'Keep-Alive',
       'Content-Type': 'application/json',
       'Host': _parsed_args.ip,
       'Accept-Encoding': 'gzip'
     }
-    self._json = {
+    self._json = { # создание словаря для тела запроса
       'local_reg': {
-        'ip': local_ip,
+        'ip': get_local_ip(),
         'notify': 0,
         'port': _parsed_args.port,
         'uri': "/local_lan"
@@ -332,244 +202,234 @@ class KeepAliveThread(threading.Thread):
     }
     super(KeepAliveThread, self).__init__(name='Keep Alive thread')
 
-  @retry(exceptions=ConnectionError, delay=0.5, max_delay=20, backoff=1.5, logger=logging)
+  @retry(exceptions=ConnectionError, delay=0.5, max_delay=20, backoff=1.5) # декоратор для повторных попыток установки соединения
   def _establish_connection(self, conn: HTTPConnection) -> None:
-    method = 'PUT' if self._alive else 'POST'
-    logging.debug('%s /local_reg.json %s', method, json.dumps(self._json))
+    '''Метод - установка соединения (отправка запросов)'''
+    method = 'PUT' if self._alive else 'POST' # выбор метода для запросов (PUT, если поток запросов живой, иначе POST)
     try:
-      conn.request(method, '/local_reg.json', json.dumps(self._json), self._headers)
-      resp = conn.getresponse()
-      if resp.status != HTTPStatus.ACCEPTED:
-        raise ConnectionError('Recieved invalid response for local_reg: ' + repr(resp))
-      resp.read()
+      conn.request(method, '/local_reg.json', json.dumps(self._json), self._headers) # отправить запрос (метод, УРЛ, тело, заголовок)
+      resp = conn.getresponse() # получить ответ
+      print('KA***Отправлены рег данные методом',method, ' notify =', self._json['local_reg']['notify'],' получен ответ',resp.status)
+      if resp.status != HTTPStatus.ACCEPTED: # если статус ответа не равен ACCEPTED
+        raise ConnectionError('Recieved invalid response for local_reg: ' + repr(resp)) # 
+      resp.read() # прочитать ответ
     except:
-      self._alive = False
+      self._alive = False # установить статус потока - не живой (если ответ от АС был не ACCEPTED)
       raise
     finally:
-      conn.close()
-    self._alive = True
+      conn.close() # закрыть соединение
+    self._alive = True # установить статус потока - живой
 
   def run(self) -> None:
-    with self.run_lock:
+    '''Метод - Создание и установка соединения'''
+    with self.run_lock: # заблокировать поток
       try:
-        conn = HTTPConnection(_parsed_args.ip, timeout=5)
-      except InvalidURL:
-        logging.exception('Invalid IP provided.')
-        _httpd.shutdown()
-        return
-      while True:
+        conn = HTTPConnection(_parsed_args.ip, timeout=5) # создать соединение
+      except InvalidURL: # если было исключение "неверный URL"
+        _httpd.shutdown() # выключить http сервер
+        return # возврат (выход из метода)
+      while True: # цикл без условия завершения (безконечный)
         try:
-          self._establish_connection(conn)
-        except:
-          logging.exception('Failed to send local_reg keep alive to the AC.')
-          _httpd.shutdown()
-          return
-        self._json['local_reg']['notify'] = int(
-            _data.commands_queue.qsize() > 0 or self.run_lock.wait(self._KEEP_ALIVE_INTERVAL))
+          self._establish_connection(conn) # выполнить метод - установка соединения
+        except: # если были исключения
+          _httpd.shutdown() # выключить http сервер
+          return # возврат (выход из метода)
+        self._json['local_reg']['notify'] = int(_data.commands_queue.qsize() > 0 or self.run_lock.wait(self._KEEP_ALIVE_INTERVAL)) #!!!ToDo записать число (разобраться как вычисляется) в тело запроса, в параметр notify (уведомлене) (разобраться зачем)
 
 class QueryStatusThread(threading.Thread):
-  """Thread to preiodically query the status of all properties.
-  
-  After start-up, essentailly all updates should be pushed to the server due
-  to the keep alive, so this is just a belt and suspenders.
+  """Поток для постановки в очередь команд на запрос значений всех свойств АС.
+     
+     Работает автономно. Ни откуда не вызывается. Каждые 600сек ставит в очередь 
+     запрос всех свойств. 
+     Очередь команд будет обработана только после запуска потока KeepAlive
+     и сервера HTTP для обмена данными с АС.
   """
   
-  _STATUS_UPDATE_INTERVAL = 600.0
-  _WAIT_FOR_EMPTY_QUEUE = 10.0
+  _STATUS_UPDATE_INTERVAL = 600.0 # интервал обновления состояния, секунд
+  _WAIT_FOR_EMPTY_QUEUE = 10.0 # ожидание пустой очереди, секунд
 
   def __init__(self):
-    self._next_command_id = 0
+    self._next_command_id = 0 # id команды
     super(QueryStatusThread, self).__init__(name='Query Status thread')
 
   def run(self) -> None:
-    while True:
-      # In case the AC is stuck, and not fetching commands, avoid flooding
-      # the queue with status updates.
-      while _data.commands_queue.qsize() > 10:
-        time.sleep(self._WAIT_FOR_EMPTY_QUEUE)
-      for data_field in fields(_data.properties):
-        command = {
+    '''Метод - для всех свойств АС формирование данных для запроса и постановка в очередь'''
+    while True: # цикл без условия завершения (безконечный)
+      # В случае, если AC застрял и не получает команды, избегайте наводнения очереди обновлениями состояния
+      while _data.commands_queue.qsize() > 10: # пока очередь больше 10
+        time.sleep(self._WAIT_FOR_EMPTY_QUEUE) # приостановить выполнение на _WAIT_FOR_EMPTY_QUEUE секунд
+      for data_field in fields(_data.properties): # для всех свойств АС из хранилища свойств
+        command = { # формирование команды для запроса свойства у АС
           'cmds': [{
             'cmd': {
-              'method': 'GET',
-              'resource': 'property.json?name=' + data_field.name,
-              'uri': '/local_lan/property/datapoint.json',
+              'method': 'GET', # метод запроса
+              'resource': 'property.json?name=' + data_field.name, # запрос определенного свойства АС
+              'uri': '/local_lan/property/datapoint.json', # адрес для ответа
               'data': '',
-              'cmd_id': self._next_command_id,
+              'cmd_id': self._next_command_id, # id команды
             }
           }]
         }
-        self._next_command_id += 1
-        _data.commands_queue.put_nowait((command, None))
-      if _keep_alive:
-        with _keep_alive.run_lock:
-          _keep_alive.run_lock.notify()
-      time.sleep(self._STATUS_UPDATE_INTERVAL)
+        self._next_command_id += 1 # увеличить id команды на 1
+        _data.commands_queue.put_nowait((command, None)) # поставить словарь comand, и "ничего" в очередь
+        print('QS***команда отправлена в очередь:',command)
+      if _keep_alive: # если существует поток _keep_alive
+        with _keep_alive.run_lock: # заблокировать поток
+          _keep_alive.run_lock.notify() #!!!ToDo что-то уведомить в потоке
+      time.sleep(self._STATUS_UPDATE_INTERVAL) # приостановить цикл на _STATUS_UPDATE_INTERVAL секунд
 
 class HTTPRequestHandler(BaseHTTPRequestHandler):
-  """Handler for AC related HTTP requests."""
+  """Класс - Обработчики запросов на этот http сервер"""
 
   def do_HEAD(self, code: HTTPStatus = HTTPStatus.OK) -> None:
-    """Return a JSON header."""
-    self.send_response(code)
-    if code == HTTPStatus.OK:
-      self.send_header('Content-type', 'application/json')
-    self.end_headers()
+    """Установка статуса ответа и заголовка ответа 'Content-type' """
+    print('HEAD***Статус ответа - ',code)
+    self.send_response(code) # отправляет статус в ответ на запрос
+    if code == HTTPStatus.OK: # если статус = ОК:
+      self.send_header('Content-type', 'application/json') # задать в заголовке тип контента
+    self.end_headers() # завершение заголовка
 
   def do_GET(self) -> None:
-    """Accepts get requests."""
-    logging.debug('GET Request,\nPath: %s\n', self.path)
-    parsed_url = urlparse(self.path)
-    query = parse_qs(parsed_url.query)
-    handler = self._HANDLERS_MAP.get(parsed_url.path)
-    if handler:
-      try:
-        handler(self, parsed_url.path, query, {})
-        return
-      except:
-        logging.exception('Failed to parse property.')
-    self.do_HEAD(HTTPStatus.NOT_FOUND)
+    """Метод - Обработка GET запросов."""
+    parsed_url = urlparse(self.path) # извлечение url, на который пришел GET запрос
+    query = parse_qs(parsed_url.query) # извлечение запроса в словарь из строки запроса
+    handler = self._HANDLERS_MAP.get(parsed_url.path) # получение обработчика на основе пути запроса из таблицы _HANDLERS_MAP
+    if handler: # если обработчик существует
+      print('GET***Получен GET запрос. Выбран обработчик -',handler.__name__,'. Передан запрос query - ',query)
+      handler(self, parsed_url.path, query, {}) # запуск обработчика и передача ему: пути, запроса, и пустого словаря с данными
+      return # возврат (выход из метода)
+    self.do_HEAD(HTTPStatus.NOT_FOUND) # ответить на запрос со статусом 404 (срабатывает, если обрабтчик не найден)
 
   def do_POST(self):
-    """Accepts post requests."""
-    content_length = int(self.headers['Content-Length'])
-    post_data = self.rfile.read(content_length)
-    logging.debug('POST request,\nPath: %s\nHeaders:\n%s\n\nBody:\n%s\n',
-                  str(self.path), str(self.headers), post_data.decode('utf-8'))
-    parsed_url = urlparse(self.path)
-    query = parse_qs(parsed_url.query)
-    data = json.loads(post_data)
-    handler = self._HANDLERS_MAP.get(parsed_url.path)
-    if handler:
-      try:
-        handler(self, parsed_url.path, query, data)
-        return
-      except:
-        logging.exception('Failed to parse property.')
-    self.do_HEAD(HTTPStatus.NOT_FOUND)
+    """Метод - Обработка POST запросов."""
+    content_length = int(self.headers['Content-Length']) # получение длины контента из заголовка
+    post_data = self.rfile.read(content_length) # чтение данных длинной content_length
+    parsed_url = urlparse(self.path) # извлечение url, на который пришел POST запрос
+    query = parse_qs(parsed_url.query) # извлечение запроса в словарь из строки запроса
+    data = json.loads(post_data) # парсинг в словарь полученной JSON строки
+    handler = self._HANDLERS_MAP.get(parsed_url.path) # получение обработчика на основе пути запроса из таблицы _HANDLERS_MAP
+    if handler: # если обработчик существует
+      print('POST***Получен POST запрос. Выбран обработчик -',handler.__name__,'. query - ',query,'. data - ',data)
+      handler(self, parsed_url.path, query, data) # запуск обработчика и передача ему: пути, запроса, и данных
+      return # возврат (выход из метода)
+    self.do_HEAD(HTTPStatus.NOT_FOUND) # ответить на запрос со статусом 404 (срабатывает, если обрабтчик не найден)
 
   def key_exchange_handler(self, path: str, query: dict, data: dict) -> None:
-    """Handles a key exchange.
-    Accepts the AC's random and time and pass its own.
-    Note that a key encryption component is the lanip_key, mapped to the
-    lanip_key_id provided by the AC. This secret part is provided by HiSense
-    server. Fortunately the lanip_key_id (and lanip_key) are static for a given
-    AC.
+    """Метод - Обрабатывает обмен ключами.
+       
+       Срабатывает при POST запросе со стороны АС на адрес
+       /local_lan/key_exchange.json
+
+       Принимает rundom и time от АС и передает заново сгенерированные.
+       Обратите внимание, что ключевым компонентом шифрования является lanip_key, 
+       сопоставленный с lanip_key_id, предоставленным AC. 
+       Эта секретная часть предоставляется сервером HiSense. 
+       К счастью, lanip_key_id (и lanip_key) являются статическими для данного АС.
     """
     try:
-      key = data['key_exchange']
-      if key['ver'] != 1 or key['proto'] != 1 or key.get('sec'):
-        raise KeyError()
-      _config.lan_config.random_1 = key['random_1']
-      _config.lan_config.time_1 = key['time_1']
-    except KeyError:
-      logging.error('Invalid key exchange: %r', data)
-      self.do_HEAD(HTTPStatus.BAD_REQUEST)
-      return
-    if key['key_id'] != _config.lan_config.lanip_key_id:
-      logging.error('The key_id has been replaced!!\nOld ID was %d; new ID is %d.',
-                    _config.lan_config.lanip_key_id, key['key_id'])
-      self.do_HEAD(HTTPStatus.NOT_FOUND)
-      return
-    _config.lan_config.random_2 = ''.join(
-        random.choices(string.ascii_letters + string.digits, k=16))
-    _config.lan_config.time_2 = time.monotonic_ns() % 2**40
-    _config.update()
-    self.do_HEAD(HTTPStatus.OK)
-    self._write_json({"random_2": _config.lan_config.random_2,
-                      "time_2": _config.lan_config.time_2})
+      print('KEY_EXCH***Получены данные - ', data)
+      key = data['key_exchange'] # извлечение из полученных данных блока key_exchange
+      if key['ver'] != 1 or key['proto'] != 1 or key.get('sec'): # проверка допустимых значений
+        raise KeyError() # переход к except KeyError:
+      keys.random_1 = key['random_1'] # чтение значения random_1 из кей и запись в хранилище lankeys
+      keys.time_1 = key['time_1'] # чтение значения time_1 и запись в хранилище lankeys
+    except KeyError: # обраобтка исключения KeyError
+      self.do_HEAD(HTTPStatus.BAD_REQUEST) # отправить в ответ статус BAD_REQUEST
+      return # возврат (выход из метода)
+    if key['key_id'] != keys.lanip_key_id: # если значение key_id не равно значению lanip_key_id в хранилище lankeys
+      self.do_HEAD(HTTPStatus.NOT_FOUND) # отправить в ответ статус BAD_REQUEST
+      return # возврат (выход из метода)
+    keys.update() # обновление ключей шифрования
+    self.do_HEAD(HTTPStatus.OK) # отправить в ответ статус ОК
+    print('KEY_EXCH***В WJ отправлены данные - ',{"random_2": keys.random_2,"time_2": keys.time_2})
+    self._write_json({"random_2": keys.random_2,"time_2": keys.time_2}) # отправить в ответ JSON со значениями random_2 и time_2
 
   def command_handler(self, path: str, query: dict, data: dict) -> None:
-    """Handles a command request.
-    Request arrives from the AC. takes a command from the queue,
-    builds the JSON, encrypts and signs it, and sends it to the AC.
+    """Метод - Обрабатывает запрос команды.
+
+       Срабатывает при GET запросе со стороны АС на адрес
+       /local_lan/commands.json
+
+      Запрос поступает от AC. Метод принимает команду из очереди,
+      формирует JSON, шифрует,подписывает его, и передает его в АС.
     """
-    command = {}
-    with _data.commands_seq_no_lock:
-      command['seq_no'] = _data.commands_seq_no
-      _data.commands_seq_no += 1
+    command = {} # создает пустой словарь command
+    with _data.commands_seq_no_lock: #!!!ToDo что-то связанно с блокировкой потока (разобраться)
+      command['seq_no'] = _data.commands_seq_no # добавить в словарь ключ seq_no и присвоить ему значение счетчика _data.commands_seq_no
+      _data.commands_seq_no += 1 # увеличить значение счетчика на 1
     try:
-      command['data'], property_updater = _data.commands_queue.get_nowait()
-    except queue.Empty:
-      command['data'], property_updater = {}, None
-    self.do_HEAD(HTTPStatus.OK)
-    self._write_json(self._encrypt_and_sign(command))
-    if property_updater:
-      property_updater()
+      command['data'], property_updater = _data.commands_queue.get_nowait() # добавить в словарь command ключ data и присвоить ему значение взятое из очереди, так же взять из очереди значение для property_updater
+    except queue.Empty: # если очередь пустая
+      command['data'], property_updater = {}, None # в ключ data поместить пустой словарь, а в property_updater значение None (т.е. переменная property_updater как бы перестает существовать)
+    print('COMMAND_HANDLER***Отправлены данные на шифровку',command)
+    self.do_HEAD(HTTPStatus.OK) # отправить в ответ статус ОК   
+    self._write_json(keys.encrypt(command)) # зашифровать и подписать словарь command и отправить в ответ на запрос
+    if property_updater: # если property_updater существует
+      property_updater() # !!!ToDo разобраться что это за property_updater, нигде нет этой функции
 
   def property_update_handler(self, path: str, query: dict, data: dict) -> None:
-    """Handles a property update request.
-    Decrypts, validates, and pushes the value into the local properties store.
-    """
-    try:
-      update = self._decrypt_and_validate(data)
-    except Error:
-      logging.exception('Failed to parse property.')
-      self.do_HEAD(HTTPStatus.BAD_REQUEST)
-      return
-    self.do_HEAD(HTTPStatus.OK)
-    with _data.updates_seq_no_lock:
-      # Every once in a while the sequence number is zeroed out, so accept it.
-      # if _data.updates_seq_no > update['seq_no'] and update['seq_no'] > 0:
-      #   logging.error('Stale update found %d. Last update used is %d.',
-      #                 (update['seq_no'], _data.updates_seq_no)) 
-      #   return  # Old update
-      _data.updates_seq_no = update['seq_no']
-    try:
-      if not update['data']:
-        logging.debug('No value returned for seq_no %d, likely an unsupported property key.',
-                      update['seq_no'])
-        return
-      name = update['data']['name']
-      data_type = _data.properties.get_type(name)
-      value = data_type(update['data']['value'])
-      _data.update_property(name, value)
-    except:
-      logging.exception('Failed to handle %s', update)
+    """Метод - Обрабатывает запрос на обновление свойств.
 
-  def get_status_handler(self, path: str, query: dict, data: dict) -> None:
-    """Handles get status request (by a smart home hub).
-    Returns the current internally stored state of the AC.
+       Срабатывает при POST запросе со стороны АС на адрес
+       /local_lan/property/datapoint.json
+
+       Расшифровывает, проверяет и помещает значение в локальное хранилище свойств.
     """
-    with _data.properties_lock:
-      data = _data.properties.to_dict()
-    self.do_HEAD(HTTPStatus.OK)
-    self._write_json(data)
+    try:
+      update = keys.decrypt(data) # расшифровать, проверить data и записать в update
+      print('PROPERTY_UPDATE_HANDLER***Получены данные с шифровки',update)
+    except Error: # если ошибка
+      self.do_HEAD(HTTPStatus.BAD_REQUEST) # Ответить на запрос со статусом BAD_REQUEST
+      return # возврат (выход из метода)
+    self.do_HEAD(HTTPStatus.OK) # Ответить на запрос со статусом ОК
+    with _data.updates_seq_no_lock:
+      # Время от времени порядковый номер обнуляется, так что примите его.
+      # if _data.updates_seq_no > update['seq_no'] and update['seq_no'] > 0:
+      #   logging.error('Stale update found %d. Last update used is %d.',(update['seq_no'], _data.updates_seq_no)) 
+      #   return  
+      # Old update
+      _data.updates_seq_no = update['seq_no'] #!!!ToDo записать значение seq_no в updates_seq_no (Зачем? разобраться)
+    name = update['data']['name'] # получение имени свойства
+    data_type = _data.properties.get_type(name) # получение типа данных для имени свойства из хранилища свойств
+    value = data_type(update['data']['value']) # привести значение свойства к нужному типу данных
+    _data.update_property(name, value) # передать свойство и значение в хранилище
+    
+  def get_status_handler(self, path: str, query: dict, data: dict) -> None:
+    """Метод - Обрабатывает запрос на получение свойств.
+
+       Срабатывает при GET запросе со стороны браузера или умного дома на адрес
+       /status
+
+       Возвращает текущее внутренне сохраненное состояние АС из хранилища данных.
+    """
+    with _data.properties_lock: # заблокировать обращение к потоку со свойствами
+      data = _data.properties.to_dict() # преобразовать набор свойств в словарь
+    print('GET_STATUS_HANDLER***В WJ отправлены данные - ',data)
+    self.do_HEAD(HTTPStatus.OK) # Ответить на запрос со статусом ОК
+    self._write_json(data) # Отправить ответ на запрос
 
   def queue_command_handler(self, path: str, query: dict, data: dict) -> None:
-    """Handles queue command request (by a smart home hub).
+    """Метод - Обрабатывает запрос на постановку в очередь команды для АС.
+
+       Срабатывает при GET запросе со стороны браузера или умного дома на адрес
+       /command
+
+       Разбирает запрос и отправляет в очередь команд свойства и значения, которое нужно изменить
     """
     try:
-      queue_command(query['property'][0], query['value'][0])
-    except:
-      logging.exception('Failed to queue command.')
-      self.do_HEAD(HTTPStatus.BAD_REQUEST)
-      return
-    self.do_HEAD(HTTPStatus.OK)
-    self._write_json({'queued commands': _data.commands_queue.qsize()})
-
-  @staticmethod
-  def _encrypt_and_sign(data: dict) -> dict:
-    text = json.dumps(data).encode('utf-8')
-    logging.debug('Encrypting: %s', text.decode('utf-8'))
-    return {
-      "enc": base64.b64encode(_config.app.cipher.encrypt(pad(text))).decode('utf-8'),
-      "sign": base64.b64encode(Encryption.hmac_digest(_config.app.sign_key, text)).decode('utf-8')
-    }
-
-  @staticmethod
-  def _decrypt_and_validate(data: dict) -> dict:
-    text = unpad(_config.dev.cipher.decrypt(base64.b64decode(data['enc'])))
-    sign = base64.b64encode(Encryption.hmac_digest(_config.dev.sign_key, text)).decode('utf-8')
-    if sign != data['sign']:
-      raise Error('Invalid signature for %s!' % text.decode('utf-8'))
-    logging.info('Decrypted: %s', text.decode('utf-8'))
-    return json.loads(text.decode('utf-8'))
+      print('QUEUE_COMMAND_HANDLER***В QUEUE_COMMAND отправлены данные - ',query['property'][0], query['value'][0])
+      queue_command(query['property'][0], query['value'][0]) # Отправить свойство и значение на формирование команды и постановку в очередь команд
+    except: # если исключение
+      self.do_HEAD(HTTPStatus.BAD_REQUEST) # Ответить на запрос со статусом BAD_REQUEST
+      return # возврат (выход из метода)
+    self.do_HEAD(HTTPStatus.OK) # Ответить на запрос со статусом ОК
+    self._write_json({'queued commands': _data.commands_queue.qsize()}) # Отправить в ответ на запрос количество команд в очереди
+  
 
   def _write_json(self, data: dict) -> None:
-    """Send out the provided data dict as JSON."""
-    logging.debug('Response:\n%s', json.dumps(data))
-    self.wfile.write(json.dumps(data).encode('utf-8'))
+    """Отправить данные в виде JSON."""
+    self.wfile.write(json.dumps(data).encode('utf-8')) # Преобразовать (сериализовать) принятый словарь в строку JSON, кодировать в utf-8 и записать в тело ответа
+    print('WRITE_JSON*** - ',data)
 
   _HANDLERS_MAP = {
     '/status': get_status_handler,
@@ -591,38 +451,103 @@ class HTTPRequestHandler(BaseHTTPRequestHandler):
     # '/local_lan/wifi_stop_ap.json': module_request_handler,
   }
 
+def queue_command(name: str, value, recursive: bool = False) -> None:
+  '''Метод - Формирование команды на изменение свойства АС и постановка в очередь
+  
+     Принимает имя свойства и его значение, формирует данные для отправки на АС
+     и ставит в очередь на исполнение.
+  '''
+  if _data.properties.get_read_only(name): # Если атрибут read-only свойства name = True
+    raise Error('Cannot update read-only property "{}".'.format(name)) # Вызвать ошибку "Невозможно изменить свойство только для чтения"
+  data_type = _data.properties.get_type(name) # получить тип данных значения свойства
+  base_type = _data.properties.get_base_type(name) # получить базовый тип данных значения свойства
+  data_value = data_type(value) # преобразовать значение в тип данных data_type
+  command = { # формирование команды для изменения
+    'properties': [{
+      'property': {
+        'base_type': base_type,
+        'name': name,
+        'value': data_value,
+        'id': ''.join(random.choices(string.ascii_letters + string.digits, k=8)),
+      }
+    }]
+  }
+  # В командах (как правило) нет acks, поэтому также ставьте в очередь обновление свойства, 
+  # которое будет запущено после отправки команды
+  property_updater = lambda: _data.update_property(name, data_value) # создание функции для обновления свойств в локальном хранилище
+  _data.commands_queue.put_nowait((command, property_updater)) # поместить в очередь команду и функцию для обновления свойств
+  print('QUEUE_COMMAND***В очередь отправлена команда - ',command,'и property_updater', property_updater)
+  # Включение режима Быстрого охлаждения
+  if name == 't_temp_heatcold' and data_value == 1:
+    # рекурсивно вызвать функцию (саму себя) для изменения четырех свойств
+    queue_command('t_fan_speed', 0, True)
+    queue_command('t_fan_mute', 0, True)
+    queue_command('t_sleep', 0, True)
+    queue_command('t_temp_eight', 0, True)
+  if not recursive: # если функция вызвана не рекурсивно
+    with _keep_alive.run_lock: # заблокировать поток _keep_alive
+      _keep_alive.run_lock.notify() # приостановить выполение keep_alive
 
 def ParseArguments() -> argparse.Namespace:
-  """Parse command line arguments."""
-  arg_parser = argparse.ArgumentParser(
-      description='JSON server for HiSense air conditioners.',
-      allow_abbrev=False)
-  arg_parser.add_argument('-p', '--port', required=True, type=int,
-                          help='Port for the server.')
-  arg_parser.add_argument('--ip', required=True,
-                          help='IP address for the AC.')
-  arg_parser.add_argument('--config', required=True,
-                          help='LAN Config file.')
+  """Разбор аргументов командной строки.
+
+     Извлекает аргументы из командной строки.
+     Разбирает на составляющие и возвращает 
+     пространство имен Namespase с аргументами: 
+     Namespace(config='имя файла.json', ip='xxx.xxx.xxx.xxx', port=номер порта)
+  """
+  arg_parser = argparse.ArgumentParser(description='JSON сервер для кондиционера Ballu.', allow_abbrev=False)
+  arg_parser.add_argument('-p', '--port', required=True, type=int, help='Порт сервера.')
+  arg_parser.add_argument('--ip', required=True, help='IP адрес кондиционера.')
+  arg_parser.add_argument('--config', required=True, help='Имя файла .json с lanip_key.')
   return arg_parser.parse_args()
 
-if __name__ == '__main__':
-    _parsed_args = ParseArguments()  # type: argparse.Namespace
+def get_local_ip():
+    '''Получение локального IP адреса
 
-    _config = Config()
-    
-    _data = Data(properties=AcProperties())
-    
-    _keep_alive = None  # type: typing.Optional[KeepAliveThread]
-
-    query_status = QueryStatusThread()
-    query_status.start()
-
-    _keep_alive = KeepAliveThread()
-    _keep_alive.start()
-
-    _httpd = HTTPServer(('', _parsed_args.port), HTTPRequestHandler)
+        Возвращает IP адрес сервера, на котором запущен модуль
+    '''
+    sock = None # пустой сокет
     try:
-      _httpd.serve_forever()
-    except KeyboardInterrupt:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) # создание объекта сокета
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1) # установка параметров сокета
+        sock.connect(('10.255.255.255', 1)) # подключение куда-то
+        local_ip = sock.getsockname()[0] # получение локального ip (ip на котором выполняется этот модуль)
+    finally:
+        if sock: # если сокет существует
+        	sock.close() # закрыть сокет
+    return local_ip
+
+
+if __name__ == '__main__':
+  _parsed_args = ParseArguments() # создание объекта с аргументами запуска  # type: argparse.Namespace
+  
+  with open(_parsed_args.config, 'r') as read_file:
+      fd = json.load(read_file)
+  
+  keys = Encryption(fd['lanip_key'],fd['lanip_key_id']) # создание объекта с набором ключей шифрования/дешифрования информации при обмене с АС
+  print('MAIN***Создан объект keys:',keys)
+    
+  _data = Data() # создание объекта - хранилаща очереди команд, свойств АС с дефолтными значениями
+  print('MAIN***Создан объект _data:',_data)
+  
+  _keep_alive = None # удаление потока keep_alive type: typing.Optional[KeepAliveThread]
+  
+  print('MAIN***Запуск потока query_status:')
+  query_status = QueryStatusThread() # создание потока - очередь запросов свойств АС
+  query_status.start() # запуск потока
+
+  print('MAIN***Пауза 5 секунд после запуска потока query_status.')
+  time.sleep(5)
+
+  print('MAIN***Запуск потока keep_alive:')
+  _keep_alive = KeepAliveThread() # создание потока поддержки связи с АС
+  _keep_alive.start() # запуск потока
+  
+  print('MAIN***Запуск сервера http:')
+  _httpd = HTTPServer(('', _parsed_args.port), HTTPRequestHandler) # создание http сервера, передача номера порта, на котором будет работать сервер и имя класса обработчика событий
+  try:
+      _httpd.serve_forever() # запуск http сервера в потоке
+  except KeyboardInterrupt:
       pass
-    _httpd.server_close()
+      _httpd.server_close() # остановка http сервера
